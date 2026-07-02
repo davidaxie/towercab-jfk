@@ -1,0 +1,474 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		046352E86309DF3AF92C7C86 /* StartScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 317DFA07A4F728C92315C698 /* StartScreen.swift */; };
+		05D6B0878AE40D7570A2262F /* AirportGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72C3592F6A7A35069B0B53D5 /* AirportGeometry.swift */; };
+		0B6A19A4A1CABE05385C3F26 /* SimTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A0B0D19C68298EBE596A3C /* SimTypes.swift */; };
+		18A44D8A2F739BF09A003827 /* RadialBloom.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BCE69057ED82A82E2CC30B8 /* RadialBloom.swift */; };
+		33DBE51EDF288359DF9BF82F /* Toasts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FC48E1D135429E1BB8B71F7 /* Toasts.swift */; };
+		41D8A08E95A4E0700C2FF18E /* SimEngine+Tick.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71A9CBD0472BB4CD48B619D6 /* SimEngine+Tick.swift */; };
+		4DA2C3F245B7084CE7A0BEF8 /* Scoring.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6494F2E812766DC86BC0F71 /* Scoring.swift */; };
+		563304F0DD99FE5C12D524C3 /* AircraftModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F329ABE4B31FF3932C83604 /* AircraftModels.swift */; };
+		5A89E285AF1DA9C36A2C74B9 /* CabInterior.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3E991CDFC2B95EA7D0709FC /* CabInterior.swift */; };
+		5C0657209A4CE0D40AD793D2 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0A61479796A25C5C8DF6732 /* AppDelegate.swift */; };
+		6A958DA3446BBBED57B2547E /* HUDRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3F486B38ACEF2E9EDF139A5 /* HUDRoot.swift */; };
+		6F10DE207EE70BE331DCCEB5 /* ScoreScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93C856628D8CC691271D55AD /* ScoreScreen.swift */; };
+		74C9B8EB7E8B9E61E884B429 /* SkyLighting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 322C4E94A552F4A1E31AFADA /* SkyLighting.swift */; };
+		7B6E9E183046C733F4C55CB0 /* GameViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DC03FA5C1BCE3E36C161420 /* GameViewController.swift */; };
+		8444016B0071001588A39F37 /* Terrain.swift in Sources */ = {isa = PBXBuildFile; fileRef = D414B5B3FFBDAC56EE312726 /* Terrain.swift */; };
+		8B411CE3C548D23B8B40712A /* UIStateBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3236FD037704B1E15FF3FF07 /* UIStateBridge.swift */; };
+		8FC0A30449D793327E4FC7F4 /* KAVXAirport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C993FCF197989CADE00CA24 /* KAVXAirport.swift */; };
+		93C8F06E421382B3F87F9BA1 /* AircraftLiveries.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84169733C843DACEF8ACEAAB /* AircraftLiveries.swift */; };
+		99D0987236CBBDE0592AABBC /* SimAircraft.swift in Sources */ = {isa = PBXBuildFile; fileRef = 420629AF55026CA8AE2EEEE0 /* SimAircraft.swift */; };
+		C79C83D356DF8F7CEFCA7778 /* AircraftObserver.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA9695D471FB3249225936C1 /* AircraftObserver.swift */; };
+		C8B7F372E4933291424F1098 /* SimEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3EABD7B9A350E766506FF53 /* SimEngine.swift */; };
+		C906DA93BB0BA6224C1AD8DF /* ShiftScript.swift in Sources */ = {isa = PBXBuildFile; fileRef = B56CCA83783FA52A8044C2FC /* ShiftScript.swift */; };
+		CB3689955423D07F0A04B225 /* WorldAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = B70DF568B0EA912B6AFE327C /* WorldAPI.swift */; };
+		D158A1AB74450FF10C93F65B /* TopBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5560C9A34220FA29A3AEF1B6 /* TopBar.swift */; };
+		D2E79AF7BF89E3527AC75D24 /* GroundDetails.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA29ED48C4AD1DECC1C25F9B /* GroundDetails.swift */; };
+		D6FFB7F530C81E30BA0D9DCF /* StripRail.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11A68F7F6D9E175C682C1D75 /* StripRail.swift */; };
+		D70BE237EFFBBCB7A1AFC9E6 /* AircraftModelStub.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D69670C8C3C3504C1DD468C /* AircraftModelStub.swift */; };
+		E1791961E813C5E624FFD784 /* CameraRig.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDEC9A9FCB727E63E4E0E1CA /* CameraRig.swift */; };
+		E7BA4FD5A0A622379755A197 /* SeededRNG.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA028140316AAEBCCB32E42B /* SeededRNG.swift */; };
+		E9FE0E312C3ED85FECD60711 /* WorldMaterials.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2654AC1134C93B989C47305D /* WorldMaterials.swift */; };
+		EF30089DB1FDE1113602FDB6 /* WorldBuildStub.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1379756A581BBE4B98D6A520 /* WorldBuildStub.swift */; };
+		F410932C4861438317224177 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA516CA09EE2610C9DE27CB9 /* Theme.swift */; };
+		F541C7FD33491BDA0CFBC3E8 /* Radio.swift in Sources */ = {isa = PBXBuildFile; fileRef = E808C9C12BA1A4F15734BE2A /* Radio.swift */; };
+		F7F87A1C73AB6316B1FC9D02 /* Conflict.swift in Sources */ = {isa = PBXBuildFile; fileRef = D72DF921ECD6B23B0FCBB246 /* Conflict.swift */; };
+		FCB3A22BCD4519E3E4644731 /* RadioLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BC27EEC28356E65930A1AF5 /* RadioLog.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		00A0B0D19C68298EBE596A3C /* SimTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimTypes.swift; sourceTree = "<group>"; };
+		0BCE69057ED82A82E2CC30B8 /* RadialBloom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RadialBloom.swift; sourceTree = "<group>"; };
+		0C993FCF197989CADE00CA24 /* KAVXAirport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KAVXAirport.swift; sourceTree = "<group>"; };
+		11A68F7F6D9E175C682C1D75 /* StripRail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StripRail.swift; sourceTree = "<group>"; };
+		1379756A581BBE4B98D6A520 /* WorldBuildStub.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldBuildStub.swift; sourceTree = "<group>"; };
+		2654AC1134C93B989C47305D /* WorldMaterials.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldMaterials.swift; sourceTree = "<group>"; };
+		317DFA07A4F728C92315C698 /* StartScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartScreen.swift; sourceTree = "<group>"; };
+		322C4E94A552F4A1E31AFADA /* SkyLighting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkyLighting.swift; sourceTree = "<group>"; };
+		3236FD037704B1E15FF3FF07 /* UIStateBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIStateBridge.swift; sourceTree = "<group>"; };
+		35082A6B249821942BC37392 /* TowerCabSlammed.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = TowerCabSlammed.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		3DC03FA5C1BCE3E36C161420 /* GameViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameViewController.swift; sourceTree = "<group>"; };
+		420629AF55026CA8AE2EEEE0 /* SimAircraft.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimAircraft.swift; sourceTree = "<group>"; };
+		4FC48E1D135429E1BB8B71F7 /* Toasts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Toasts.swift; sourceTree = "<group>"; };
+		5560C9A34220FA29A3AEF1B6 /* TopBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopBar.swift; sourceTree = "<group>"; };
+		5BC27EEC28356E65930A1AF5 /* RadioLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RadioLog.swift; sourceTree = "<group>"; };
+		6F329ABE4B31FF3932C83604 /* AircraftModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AircraftModels.swift; sourceTree = "<group>"; };
+		71A9CBD0472BB4CD48B619D6 /* SimEngine+Tick.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SimEngine+Tick.swift"; sourceTree = "<group>"; };
+		72C3592F6A7A35069B0B53D5 /* AirportGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirportGeometry.swift; sourceTree = "<group>"; };
+		84169733C843DACEF8ACEAAB /* AircraftLiveries.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AircraftLiveries.swift; sourceTree = "<group>"; };
+		8D69670C8C3C3504C1DD468C /* AircraftModelStub.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AircraftModelStub.swift; sourceTree = "<group>"; };
+		93C856628D8CC691271D55AD /* ScoreScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScoreScreen.swift; sourceTree = "<group>"; };
+		A0DF57506E4D8344E0590F2B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		AA028140316AAEBCCB32E42B /* SeededRNG.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeededRNG.swift; sourceTree = "<group>"; };
+		B3F486B38ACEF2E9EDF139A5 /* HUDRoot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HUDRoot.swift; sourceTree = "<group>"; };
+		B56CCA83783FA52A8044C2FC /* ShiftScript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShiftScript.swift; sourceTree = "<group>"; };
+		B70DF568B0EA912B6AFE327C /* WorldAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldAPI.swift; sourceTree = "<group>"; };
+		C3E991CDFC2B95EA7D0709FC /* CabInterior.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CabInterior.swift; sourceTree = "<group>"; };
+		D414B5B3FFBDAC56EE312726 /* Terrain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Terrain.swift; sourceTree = "<group>"; };
+		D6494F2E812766DC86BC0F71 /* Scoring.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Scoring.swift; sourceTree = "<group>"; };
+		D72DF921ECD6B23B0FCBB246 /* Conflict.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Conflict.swift; sourceTree = "<group>"; };
+		E0A61479796A25C5C8DF6732 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		E3EABD7B9A350E766506FF53 /* SimEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimEngine.swift; sourceTree = "<group>"; };
+		E808C9C12BA1A4F15734BE2A /* Radio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Radio.swift; sourceTree = "<group>"; };
+		EA29ED48C4AD1DECC1C25F9B /* GroundDetails.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroundDetails.swift; sourceTree = "<group>"; };
+		EA516CA09EE2610C9DE27CB9 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		FA9695D471FB3249225936C1 /* AircraftObserver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AircraftObserver.swift; sourceTree = "<group>"; };
+		FDEC9A9FCB727E63E4E0E1CA /* CameraRig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraRig.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		2169CB6EECFBE4AB78A19F58 /* Sim */ = {
+			isa = PBXGroup;
+			children = (
+				D72DF921ECD6B23B0FCBB246 /* Conflict.swift */,
+				0C993FCF197989CADE00CA24 /* KAVXAirport.swift */,
+				E808C9C12BA1A4F15734BE2A /* Radio.swift */,
+				D6494F2E812766DC86BC0F71 /* Scoring.swift */,
+				AA028140316AAEBCCB32E42B /* SeededRNG.swift */,
+				B56CCA83783FA52A8044C2FC /* ShiftScript.swift */,
+				420629AF55026CA8AE2EEEE0 /* SimAircraft.swift */,
+				E3EABD7B9A350E766506FF53 /* SimEngine.swift */,
+				71A9CBD0472BB4CD48B619D6 /* SimEngine+Tick.swift */,
+				00A0B0D19C68298EBE596A3C /* SimTypes.swift */,
+			);
+			path = Sim;
+			sourceTree = "<group>";
+		};
+		2C34126280BA7D2C61324A5D /* World */ = {
+			isa = PBXGroup;
+			children = (
+				84169733C843DACEF8ACEAAB /* AircraftLiveries.swift */,
+				6F329ABE4B31FF3932C83604 /* AircraftModels.swift */,
+				8D69670C8C3C3504C1DD468C /* AircraftModelStub.swift */,
+				FA9695D471FB3249225936C1 /* AircraftObserver.swift */,
+				72C3592F6A7A35069B0B53D5 /* AirportGeometry.swift */,
+				C3E991CDFC2B95EA7D0709FC /* CabInterior.swift */,
+				EA29ED48C4AD1DECC1C25F9B /* GroundDetails.swift */,
+				322C4E94A552F4A1E31AFADA /* SkyLighting.swift */,
+				D414B5B3FFBDAC56EE312726 /* Terrain.swift */,
+				B70DF568B0EA912B6AFE327C /* WorldAPI.swift */,
+				1379756A581BBE4B98D6A520 /* WorldBuildStub.swift */,
+				2654AC1134C93B989C47305D /* WorldMaterials.swift */,
+			);
+			path = World;
+			sourceTree = "<group>";
+		};
+		6E7AFA50F66375592AA35D97 /* TowerCabSlammed */ = {
+			isa = PBXGroup;
+			children = (
+				A0DF57506E4D8344E0590F2B /* Info.plist */,
+				7E4EC1D2F1CE435D3D396A34 /* App */,
+				7D9B31843B5C16BAF691730E /* Presentation */,
+				2169CB6EECFBE4AB78A19F58 /* Sim */,
+				AF2282D3E8CC206E8E797BE2 /* UI */,
+				2C34126280BA7D2C61324A5D /* World */,
+			);
+			path = TowerCabSlammed;
+			sourceTree = "<group>";
+		};
+		7D9B31843B5C16BAF691730E /* Presentation */ = {
+			isa = PBXGroup;
+			children = (
+				FDEC9A9FCB727E63E4E0E1CA /* CameraRig.swift */,
+			);
+			path = Presentation;
+			sourceTree = "<group>";
+		};
+		7E4EC1D2F1CE435D3D396A34 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				E0A61479796A25C5C8DF6732 /* AppDelegate.swift */,
+				3DC03FA5C1BCE3E36C161420 /* GameViewController.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		ADC6A4D3BF59724A93FA9877 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				35082A6B249821942BC37392 /* TowerCabSlammed.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		AF2282D3E8CC206E8E797BE2 /* UI */ = {
+			isa = PBXGroup;
+			children = (
+				B3F486B38ACEF2E9EDF139A5 /* HUDRoot.swift */,
+				0BCE69057ED82A82E2CC30B8 /* RadialBloom.swift */,
+				5BC27EEC28356E65930A1AF5 /* RadioLog.swift */,
+				93C856628D8CC691271D55AD /* ScoreScreen.swift */,
+				317DFA07A4F728C92315C698 /* StartScreen.swift */,
+				11A68F7F6D9E175C682C1D75 /* StripRail.swift */,
+				EA516CA09EE2610C9DE27CB9 /* Theme.swift */,
+				4FC48E1D135429E1BB8B71F7 /* Toasts.swift */,
+				5560C9A34220FA29A3AEF1B6 /* TopBar.swift */,
+				3236FD037704B1E15FF3FF07 /* UIStateBridge.swift */,
+			);
+			path = UI;
+			sourceTree = "<group>";
+		};
+		DC3A7BB8DF63935ED4B14DE5 = {
+			isa = PBXGroup;
+			children = (
+				6E7AFA50F66375592AA35D97 /* TowerCabSlammed */,
+				ADC6A4D3BF59724A93FA9877 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		59CB0869A79C63DF499E4DA6 /* TowerCabSlammed */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0AADDD58D9B347E83B481877 /* Build configuration list for PBXNativeTarget "TowerCabSlammed" */;
+			buildPhases = (
+				3F6BA35A74456F1002B093F8 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = TowerCabSlammed;
+			packageProductDependencies = (
+			);
+			productName = TowerCabSlammed;
+			productReference = 35082A6B249821942BC37392 /* TowerCabSlammed.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		432F65A35D5E5F64424DED39 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					59CB0869A79C63DF499E4DA6 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = 91D49635625BC985B14F94CF /* Build configuration list for PBXProject "TowerCabSlammed" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = DC3A7BB8DF63935ED4B14DE5;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				59CB0869A79C63DF499E4DA6 /* TowerCabSlammed */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		3F6BA35A74456F1002B093F8 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				93C8F06E421382B3F87F9BA1 /* AircraftLiveries.swift in Sources */,
+				D70BE237EFFBBCB7A1AFC9E6 /* AircraftModelStub.swift in Sources */,
+				563304F0DD99FE5C12D524C3 /* AircraftModels.swift in Sources */,
+				C79C83D356DF8F7CEFCA7778 /* AircraftObserver.swift in Sources */,
+				05D6B0878AE40D7570A2262F /* AirportGeometry.swift in Sources */,
+				5C0657209A4CE0D40AD793D2 /* AppDelegate.swift in Sources */,
+				5A89E285AF1DA9C36A2C74B9 /* CabInterior.swift in Sources */,
+				E1791961E813C5E624FFD784 /* CameraRig.swift in Sources */,
+				F7F87A1C73AB6316B1FC9D02 /* Conflict.swift in Sources */,
+				7B6E9E183046C733F4C55CB0 /* GameViewController.swift in Sources */,
+				D2E79AF7BF89E3527AC75D24 /* GroundDetails.swift in Sources */,
+				6A958DA3446BBBED57B2547E /* HUDRoot.swift in Sources */,
+				8FC0A30449D793327E4FC7F4 /* KAVXAirport.swift in Sources */,
+				18A44D8A2F739BF09A003827 /* RadialBloom.swift in Sources */,
+				F541C7FD33491BDA0CFBC3E8 /* Radio.swift in Sources */,
+				FCB3A22BCD4519E3E4644731 /* RadioLog.swift in Sources */,
+				6F10DE207EE70BE331DCCEB5 /* ScoreScreen.swift in Sources */,
+				4DA2C3F245B7084CE7A0BEF8 /* Scoring.swift in Sources */,
+				E7BA4FD5A0A622379755A197 /* SeededRNG.swift in Sources */,
+				C906DA93BB0BA6224C1AD8DF /* ShiftScript.swift in Sources */,
+				99D0987236CBBDE0592AABBC /* SimAircraft.swift in Sources */,
+				41D8A08E95A4E0700C2FF18E /* SimEngine+Tick.swift in Sources */,
+				C8B7F372E4933291424F1098 /* SimEngine.swift in Sources */,
+				0B6A19A4A1CABE05385C3F26 /* SimTypes.swift in Sources */,
+				74C9B8EB7E8B9E61E884B429 /* SkyLighting.swift in Sources */,
+				046352E86309DF3AF92C7C86 /* StartScreen.swift in Sources */,
+				D6FFB7F530C81E30BA0D9DCF /* StripRail.swift in Sources */,
+				8444016B0071001588A39F37 /* Terrain.swift in Sources */,
+				F410932C4861438317224177 /* Theme.swift in Sources */,
+				33DBE51EDF288359DF9BF82F /* Toasts.swift in Sources */,
+				D158A1AB74450FF10C93F65B /* TopBar.swift in Sources */,
+				8B411CE3C548D23B8B40712A /* UIStateBridge.swift in Sources */,
+				CB3689955423D07F0A04B225 /* WorldAPI.swift in Sources */,
+				EF30089DB1FDE1113602FDB6 /* WorldBuildStub.swift in Sources */,
+				E9FE0E312C3ED85FECD60711 /* WorldMaterials.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		1A0FDF051FD27DDF8852ACDC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = TowerCabSlammed/Info.plist;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.davidxie.towercab-slammed";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		2E19E6E1ED48A49247B2E0CF /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = TowerCabSlammed/Info.plist;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.davidxie.towercab-slammed";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		47075211D717BF24815B4990 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Debug;
+		};
+		D9FF371E35FC0CD4EF00E551 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		0AADDD58D9B347E83B481877 /* Build configuration list for PBXNativeTarget "TowerCabSlammed" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1A0FDF051FD27DDF8852ACDC /* Debug */,
+				2E19E6E1ED48A49247B2E0CF /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		91D49635625BC985B14F94CF /* Build configuration list for PBXProject "TowerCabSlammed" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				47075211D717BF24815B4990 /* Debug */,
+				D9FF371E35FC0CD4EF00E551 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 432F65A35D5E5F64424DED39 /* Project object */;
+}

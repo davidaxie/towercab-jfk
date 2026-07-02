@@ -1,0 +1,12 @@
+/*
+!/.gitignore
+!/README.md
+!/towercab-slammed/
+!/towercab-slammed/**
+
+# TowerCab: Slammed build artifacts
+towercab-slammed/DerivedData/
+towercab-slammed/build/
+towercab-slammed/*.xcodeproj/xcuserdata/
+towercab-slammed/*.xcodeproj/project.xcworkspace/xcuserdata/
+
