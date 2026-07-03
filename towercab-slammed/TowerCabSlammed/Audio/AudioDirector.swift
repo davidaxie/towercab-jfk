@@ -182,12 +182,18 @@ final class AudioDirector {
         case .removed:                (levelTarget, freqScale) = (0, 0.7)
         }
 
-        // Type character.
+        // Type character — driven by the spec engine class so all 16 types map
+        // without a per-case list. Prop chop for piston/turboprop, jet whine
+        // (no blade chop) for jets. Bigger metal idles a touch lower/louder.
         let idle: Double
-        switch kind {
-        case .lark72:  idle = 78;  p.propHz = 80;  p.noiseMix = 0.28
-        case .vela22:  idle = 92;  p.propHz = 96;  p.noiseMix = 0.30
-        case .comet60: idle = 210; p.propHz = 0;   p.noiseMix = 0.55   // jet: whine, no chop
+        switch kind.spec.engine {
+        case .piston:
+            idle = kind.spec.wingspanM > 14 ? 88 : 78   // DC-3 vs light singles
+            p.propHz = 82; p.noiseMix = 0.28
+        case .turboprop:
+            idle = 120; p.propHz = 104; p.noiseMix = 0.34   // turbine whine + prop
+        case .jet:
+            idle = 210; p.propHz = 0; p.noiseMix = 0.55     // jet: whine, no chop
         }
         p.baseFreq = idle * freqScale * (1 + Double(min(speed, 90)) / 260)
         p.level += (levelTarget - p.level) * Float(min(1, dt * 3))

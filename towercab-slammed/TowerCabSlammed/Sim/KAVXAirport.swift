@@ -92,6 +92,11 @@ public struct AirportLayout {
     public let exits: [RunwayExit]
     public let apronSpots: [ApronSpot]
 
+    /// Capability gate: which SizeClasses may spawn here. The rarity-weighted
+    /// spawn picker filters the fleet to these. KAVX (short mesa runway, no
+    /// jet ops) accepts light / cabinTwin / turboprop / heritage — NO jets.
+    public let acceptedClasses: Set<SizeClass>
+
     // --- Ground routes (polylines the sim follows verbatim; no pathfinding in slice) ---
     /// Apron → parallel taxiway → hold-short of runway 22 (NE end).
     public let routeTaxiOut: [V2]
@@ -286,6 +291,9 @@ public struct AirportLayout {
             taxiways: [taxiwayAlpha, a1, a2, a3],
             exits: exits,
             apronSpots: spots,
+            // KAVX capability gate: GA + turboprop + the DC-3, NO jets. The
+            // short mesa runway and single ramp can't take airliner metal.
+            acceptedClasses: [.light, .cabinTwin, .turboprop, .heritage],
             routeTaxiOut: routeTaxiOut,
             routeExitMidfield: routeExitMidfield,
             routeExitEnd: routeExitEnd,
@@ -307,6 +315,7 @@ public struct AirportLayout {
 
     public init(icao: String, displayName: String, runway: Runway, taxiways: [Taxiway],
                 exits: [RunwayExit], apronSpots: [ApronSpot],
+                acceptedClasses: Set<SizeClass>,
                 routeTaxiOut: [V2], routeExitMidfield: [V2], routeExitEnd: [V2],
                 routeLineUp: [V2], holdShortPoint: V2,
                 patternAltitude: Double, downwindOffset: Double, finalSpawnDistance: Double,
@@ -315,6 +324,7 @@ public struct AirportLayout {
                 towerCabEye: V3, windsockPosition: V2) {
         self.icao = icao; self.displayName = displayName; self.runway = runway
         self.taxiways = taxiways; self.exits = exits; self.apronSpots = apronSpots
+        self.acceptedClasses = acceptedClasses
         self.routeTaxiOut = routeTaxiOut; self.routeExitMidfield = routeExitMidfield
         self.routeExitEnd = routeExitEnd; self.routeLineUp = routeLineUp
         self.holdShortPoint = holdShortPoint

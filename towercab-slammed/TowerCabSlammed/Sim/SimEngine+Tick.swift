@@ -82,9 +82,67 @@ extension SimEngine {
         rw.point(atStationFrom22: s) + perpPattern * airport.downwindOffset
     }
     private func turnRate(_ ac: Aircraft) -> Double {
-        ac.kind == .comet60 ? Tune.cometTurnRate : Tune.patternTurnRate
+        ac.kind.engineIsJet ? Tune.cometTurnRate : Tune.patternTurnRate
     }
     private func groundY(_ p: V2) -> Double { airport.groundHeight(at: p) }
+
+    // MARK: Attitude presentation (PRESENTATION-ONLY — never feeds sim state)
+
+    /// Coordinated-bank ceiling per type: GA rolls to a genuine ~37°, the Comet
+    /// stays a more sedate ~29° in the pattern. Read by `steer`.
+    private func maxBank(_ ac: Aircraft) -> Double {
+        ac.kind.engineIsJet ? 0.50 : 0.65
+    }
+    /// Cruise angle-of-attack per type, radians — the slight nose-up a wing
+    /// carries in level flight, and the baseline the flight-path angle rides on.
+    private func angleOfAttack(_ ac: Aircraft) -> Double {
+        ac.kind.engineIsJet ? 0.045 : 0.05
+    }
+    /// ONE coherent pitch law. Pitch is a cosmetic readout of the flight-path
+    /// angle (from verticalSpeed / speed) plus the wing's AoA, eased in at a
+    /// believable pitch rate. It NEVER drives verticalSpeed — purely visual.
+    private func drivePitch(_ ac: Aircraft, aoa: Double, dt: Double,
+                            rate: Double = 0.35, vFloor: Double = 20) {
+        let fpa = atan2(ac.verticalSpeed, max(ac.speed, vFloor))
+        let target = fpa + aoa
+        let maxStep = rate * dt
+        let delta = target - ac.pitch
+        ac.pitch += max(-maxStep, min(maxStep, delta))
+    }
+
+    // MARK: Wind (deterministic — seed-derived, constant per shift)
+
+    /// The wind as a world vector pointing in the direction air is MOVING TOWARD
+    /// (m/s). `wind.directionDeg` is the compass bearing the wind blows FROM, so
+    /// the flow vector points the opposite way. Constant for the whole shift, so
+    /// this is a pure function of the (seed-derived) wind — determinism-safe.
+    private var windToVector: V2 {
+        let fromRad = degToRad(wind.directionDeg)
+        // Heading `fromRad` points where the wind comes from; flow is +180°.
+        let flowHeading = fromRad + .pi
+        return headingDirection(flowHeading) * ktsToMps(wind.speedKts)
+    }
+
+    /// Crab angle to hold a ground track along `groundHeading` in the current
+    /// wind (radians, nose-into-wind). PRESENTATION-ONLY: the deterministic
+    /// ground track stays on `heading`; the renderer points the nose at
+    /// heading+crab. Clamped to ±0.3 rad so it never reads cartoonish.
+    private func crabAngle(forGroundHeading groundHeading: Double, airspeed: Double) -> Double {
+        // Crosswind = wind component perpendicular (to the right) of the track.
+        let track = headingDirection(groundHeading)
+        let right = V2(track.y, -track.x)
+        let crosswind = simd_dot(windToVector, right)
+        let ratio = max(-0.3, min(0.3, crosswind / max(airspeed, 20)))
+        // Nose yaws INTO the wind: toward the side the crosswind comes from,
+        // i.e. opposite the direction it pushes the aircraft.
+        return -asin(ratio)
+    }
+    /// Ease `crab` toward a target at a gentle rate (radians/s). Presentation-only.
+    private func easeCrab(_ ac: Aircraft, toward target: Double, dt: Double, rate: Double = 0.4) {
+        let maxStep = rate * dt
+        let delta = target - ac.crab
+        ac.crab += max(-maxStep, min(maxStep, delta))
+    }
 
     // MARK: - Tick
 
@@ -416,6 +474,7 @@ extension SimEngine {
         case .exitingRunway, .taxiToApron:
             updateTaxiIn(ac, dt: dt, now: now)
         case .startingUp:
+            ac.throttle += (0.15 - ac.throttle) * min(1, dt * 2)
             if ac.phaseTime >= 4 {
                 pilotSay(ac, radio.pilotReadyToTaxi(ac.callsign))
                 // B25 — the tower answers with an actual taxi clearance.
@@ -470,8 +529,11 @@ extension SimEngine {
 
         // Lateral: pursue a point on the centerline just ahead.
         let aim = rw.point(atStationFrom22: -(d - Tune.approachLookahead))
-        ac.steer(toPoint: aim, maxRate: turnRate(ac), dt: dt)
+        ac.steer(toPoint: aim, maxRate: turnRate(ac), dt: dt, maxBank: maxBank(ac))
         driveGlide(ac, targetAlt: glideAlt(d), dt: dt)
+        // Crosswind crab on final: point the nose into wind, ground track unchanged.
+        easeCrab(ac, toward: crabAngle(forGroundHeading: rw.heading22, airspeed: ac.speed), dt: dt)
+        ac.throttle += (0.5 - ac.throttle) * min(1, dt * 2)
 
         // B12/B20 — enter the flare at a truthful point and keep integrating
         // this tick (no one-frame freeze at the most-watched moment).
@@ -492,7 +554,8 @@ extension SimEngine {
         if targetAlt > ac.altitude { desired = min(desired + 2.5, ac.kind.climbRate) }
         desired = max(gentle ? -6 : -9, min(desired, 4))
         ac.verticalSpeed += (desired - ac.verticalSpeed) * min(1, dt * 2.2)
-        ac.pitch += (atan2(ac.verticalSpeed, max(ac.speed, 20)) * 0.9 - ac.pitch) * min(1, dt * 3)
+        // Cosmetic pitch: flight-path angle + AoA, eased by the one pitch law.
+        drivePitch(ac, aoa: angleOfAttack(ac), dt: dt)
     }
 
     private func updateDownwind(_ ac: Aircraft, dt: Double) {
@@ -505,19 +568,24 @@ extension SimEngine {
             }
         }
         ac.driveSpeed(toward: ac.kind.patternSpeed, accel: 1.2, decel: 1.0, dt: dt)
-        ac.steer(toPoint: downwindPoint(station: s - 320), maxRate: turnRate(ac), dt: dt)
+        ac.steer(toPoint: downwindPoint(station: s - 320), maxRate: turnRate(ac), dt: dt,
+                 maxBank: maxBank(ac))
         // B7 — hold pattern altitude on the downwind; the descent lives on base.
         driveGlide(ac, targetAlt: patternAbsAlt, dt: dt, gentle: true)
+        easeCrab(ac, toward: crabAngle(forGroundHeading: ac.heading, airspeed: ac.speed), dt: dt)
+        ac.throttle += (0.5 - ac.throttle) * min(1, dt * 2)
         ac.integrate(dt: dt)
     }
 
     private func updateBase(_ ac: Aircraft, dt: Double) {
         let intercept = rw.point(atStationFrom22: airport.baseTurnStation)
         ac.driveSpeed(toward: ac.kind.patternSpeed * 0.9, accel: 1.0, decel: 1.0, dt: dt)
-        ac.steer(toPoint: intercept, maxRate: turnRate(ac), dt: dt)
+        ac.steer(toPoint: intercept, maxRate: turnRate(ac), dt: dt, maxBank: maxBank(ac))
         let lateral = abs(cross(of: ac.pos2))
         let pathDist = lateral - airport.baseTurnStation
         driveGlide(ac, targetAlt: min(patternAbsAlt, glideAlt(pathDist)), dt: dt, gentle: true)
+        easeCrab(ac, toward: crabAngle(forGroundHeading: ac.heading, airspeed: ac.speed), dt: dt)
+        ac.throttle += (0.5 - ac.throttle) * min(1, dt * 2)
         ac.integrate(dt: dt)
         if lateral < 150 { ac.phase = .finalApproach }
     }
@@ -528,10 +596,15 @@ extension SimEngine {
         let rate = turnRate(ac) * (ac.orbitLeft ? -1.0 : 1.0)
         ac.heading += rate * dt
         ac.orbitRemaining -= abs(rate * dt)
-        let targetBank = atan((abs(rate) * max(ac.speed, 20)) / 9.81) * (ac.orbitLeft ? -1 : 1)
-        ac.bank += (max(-0.6, min(0.6, targetBank)) - ac.bank) * min(1, dt * 4)
+        // TRUE coordinated bank for the orbit rate, ceiling per type, rate-limited.
+        let idealBank = atan((abs(rate) * max(ac.speed, 20)) / 9.81) * (ac.orbitLeft ? -1 : 1)
+        let mb = maxBank(ac)
+        ac.rollBank(toward: max(-mb, min(mb, idealBank)), dt: dt)
         ac.driveSpeed(toward: ac.kind.patternSpeed, accel: 1.0, decel: 0.8, dt: dt)
         ac.verticalSpeed += (0 - ac.verticalSpeed) * min(1, dt * 2)
+        drivePitch(ac, aoa: angleOfAttack(ac), dt: dt)
+        easeCrab(ac, toward: crabAngle(forGroundHeading: ac.heading, airspeed: ac.speed), dt: dt)
+        ac.throttle += (0.5 - ac.throttle) * min(1, dt * 2)
         ac.integrate(dt: dt)
         if ac.orbitRemaining <= 0 {
             let resume = ac.resumePhase == .orbiting ? .finalApproach : ac.resumePhase
@@ -590,7 +663,10 @@ extension SimEngine {
         let climbing = ac.altitude < patternAbsAlt - 5
         let desiredVS = climbing ? ac.kind.climbRate : 0
         ac.verticalSpeed += (desiredVS - ac.verticalSpeed) * min(1, dt * 1.8)
-        ac.pitch += (atan2(ac.verticalSpeed, max(ac.speed, 20)) - ac.pitch) * min(1, dt * 3)
+        // Climb attitude via the one pitch law; go-arounds are firewalled power.
+        drivePitch(ac, aoa: angleOfAttack(ac), dt: dt)
+        easeCrab(ac, toward: crabAngle(forGroundHeading: ac.heading, airspeed: ac.speed), dt: dt)
+        ac.throttle += ((climbing ? 0.95 : 0.6) - ac.throttle) * min(1, dt * 2.5)
 
         let entryStation = ac.rejoinEntryStation.isNaN
             ? airport.downwindEntryStation : ac.rejoinEntryStation
@@ -598,16 +674,16 @@ extension SimEngine {
         let s = station(of: ac.pos2)
         if ac.gaFromPattern {
             // Straight to the (staggered) downwind entry — a tidy rejoin.
-            ac.steer(toPoint: entry, maxRate: turnRate(ac), dt: dt)
+            ac.steer(toPoint: entry, maxRate: turnRate(ac), dt: dt, maxBank: maxBank(ac))
             if simd_length(entry - ac.pos2) < 300 {
                 ac.phase = .downwind
                 ac.rejoinEntryStation = .nan
                 pilotSay(ac, radio.pilotBackOnDownwind(ac.callsign))
             }
         } else if s < 650 || ac.altitude < patternAbsAlt * 0.55 {
-            ac.steer(toward: rw.heading22, maxRate: turnRate(ac), dt: dt)      // straight ahead
+            ac.steer(toward: rw.heading22, maxRate: turnRate(ac), dt: dt, maxBank: maxBank(ac))  // straight ahead
         } else {
-            ac.steer(toPoint: entry, maxRate: turnRate(ac), dt: dt)            // crosswind → downwind
+            ac.steer(toPoint: entry, maxRate: turnRate(ac), dt: dt, maxBank: maxBank(ac))        // crosswind → downwind
             if simd_length(entry - ac.pos2) < 300 {
                 ac.phase = .downwind
                 ac.rejoinEntryStation = .nan
@@ -625,8 +701,19 @@ extension SimEngine {
         let ttd = max(0.4, remaining / max(ac.speed, 10))
         let desiredVS = max(-4.0, min(0, -(ac.altitude - groundH) / ttd))
         ac.verticalSpeed += (desiredVS - ac.verticalSpeed) * min(1, dt * 3)
-        ac.pitch += (0.07 - ac.pitch) * min(1, dt * 2.5)   // nose-up in the flare
-        ac.steer(toPoint: rw.point(atStationFrom22: s + 120), maxRate: 0.2, dt: dt)
+        // Nose rotates nose-up INTO the flare (main gear first). Ramp the flare
+        // AoA from cruise up to a per-type touchdown target as height bleeds off,
+        // so contact happens ~0.12–0.16 rad nose-up. Cosmetic — VS is unchanged.
+        let agl = max(0, ac.altitude - groundH)
+        let flareProgress = 1 - min(1, agl / Tune.flareAGL)          // 0 high → 1 at deck
+        let tdTarget = ac.kind.engineIsJet ? 0.12 : 0.16
+        let flareAoA = angleOfAttack(ac) + (tdTarget - angleOfAttack(ac)) * flareProgress
+        drivePitch(ac, aoa: flareAoA, dt: dt, rate: 0.4, vFloor: 15)
+        // De-crab through the flare so it touches down runway-aligned.
+        easeCrab(ac, toward: 0, dt: dt, rate: 0.6)
+        ac.throttle += (0.2 - ac.throttle) * min(1, dt * 2.5)
+        ac.steer(toPoint: rw.point(atStationFrom22: s + 120), maxRate: 0.2, dt: dt,
+                 maxBank: maxBank(ac))
         ac.integrate(dt: dt)
         ac.altitude = max(ac.altitude, groundY(ac.pos2))
         if ac.altitude <= groundY(ac.pos2) + 0.15 || s >= ac.touchdownStation {
@@ -671,9 +758,15 @@ extension SimEngine {
         } else if remaining > 6 {
             ac.driveSpeed(toward: Tune.exitSpeed * 1.3, accel: base * 0.5, decel: base, dt: dt)
         }
-        ac.pitch += (0 - ac.pitch) * min(1, dt * 2)
-        ac.bank = 0
-        ac.steer(toPoint: rw.point(atStationFrom22: s + 90), maxRate: 0.25, dt: dt)
+        // De-rotation: main gear is down; ease the nose-up pitch → 0 over ~1.5 s
+        // (nosewheel settles), and ease any residual bank → wings level over
+        // ~0.5 s rather than snapping. Crab stays 0 (de-crabbed in the flare).
+        let deRotStep = (0.16 / 1.5) * dt                     // ~0.107 rad/s cap
+        ac.pitch += max(-deRotStep, min(deRotStep, 0 - ac.pitch))
+        ac.rollBank(toward: 0, dt: dt, rollRate: 0.9)         // wings level ≤ ~0.5 s
+        ac.throttle += (0.15 - ac.throttle) * min(1, dt * 2.5)
+        ac.steer(toPoint: rw.point(atStationFrom22: s + 90), maxRate: 0.25, dt: dt,
+                 maxBank: maxBank(ac))
         ac.integrate(dt: dt)
         ac.altitude = groundY(ac.pos2)
 
@@ -710,6 +803,9 @@ extension SimEngine {
 
     private func updateTaxiIn(_ ac: Aircraft, dt: Double, now: Double) {
         ac.altitude = groundY(ac.pos2)
+        // Idle taxi power; crab and any residual attitude relax on the ground.
+        ac.throttle += (0.15 - ac.throttle) * min(1, dt * 2)
+        easeCrab(ac, toward: 0, dt: dt)
         if ac.holdingPosition || groundBlocked(ac, arrivalsOnly: true) {   // B4
             ac.driveSpeed(toward: 0, accel: 0, decel: 2.2, dt: dt)
             ac.integrate(dt: dt)
@@ -733,6 +829,7 @@ extension SimEngine {
 
     private func updateTaxiOut(_ ac: Aircraft, dt: Double, now: Double) {
         ac.altitude = groundY(ac.pos2)
+        ac.throttle += (0.15 - ac.throttle) * min(1, dt * 2)
         // B4 — departures yield to everyone ahead (arrivals clearing have
         // priority; a queue forms naturally at the hold-short line).
         if ac.holdingPosition || groundBlocked(ac, arrivalsOnly: false) {
@@ -753,11 +850,13 @@ extension SimEngine {
 
     private func updateWaiting(_ ac: Aircraft, dt: Double, now: Double) {
         ac.altitude = groundY(ac.pos2)
+        ac.throttle += (0.15 - ac.throttle) * min(1, dt * 2)
         accrueWait(ac, dt: dt, now: now)
     }
 
     private func updateLineUpWait(_ ac: Aircraft, dt: Double, now: Double) {
         ac.altitude = groundY(ac.pos2)
+        ac.throttle += (0.15 - ac.throttle) * min(1, dt * 2)
         if !ac.lineupComplete {
             if ac.followRoute(speed: ac.kind.taxiSpeed * 0.85, accel: 0.9,
                               turnRate: Tune.taxiTurnRate, dt: dt) {
@@ -775,6 +874,7 @@ extension SimEngine {
     private func updateTakeoffRoll(_ ac: Aircraft, dt: Double, now: Double) {
         ac.altitude = groundY(ac.pos2)
         if !ac.lineupComplete {
+            ac.throttle += (0.3 - ac.throttle) * min(1, dt * 2)   // taxiing into position
             if ac.followRoute(speed: ac.kind.taxiSpeed, accel: 1.0,
                               turnRate: Tune.taxiTurnRate, dt: dt) {
                 ac.lineupComplete = true
@@ -784,6 +884,7 @@ extension SimEngine {
             return
         }
         if ac.preRollPause > 0 {
+            ac.throttle += (0.5 - ac.throttle) * min(1, dt * 3)   // spooling up on the numbers
             ac.preRollPause = max(0, ac.preRollPause - dt)
             if ac.preRollPause > 0 { return }
         }
@@ -799,8 +900,16 @@ extension SimEngine {
         }
         ac.urgency = nil
         ac.speed += ac.kind.takeoffAccel * dt
-        ac.steer(toward: rw.heading22, maxRate: 0.15, dt: dt)
+        ac.steer(toward: rw.heading22, maxRate: 0.15, dt: dt, maxBank: maxBank(ac))
         ac.bank = 0
+        // Firewalled power on the roll.
+        ac.throttle += (1.0 - ac.throttle) * min(1, dt * 3)
+        // Rotation as an ARC: as speed climbs rotateSpeed*0.9 → rotateSpeed, ease
+        // the nose 0 → ~0.14 rad over ~1 s. Purely presentation — the liftoff
+        // moment (speed ≥ rotateSpeed) is unchanged, so the harness is identical.
+        let vr = ac.kind.rotateSpeed
+        let rotFrac = max(0, min(1, (ac.speed - vr * 0.9) / (vr * 0.1)))
+        drivePitch2(ac, target: 0.14 * rotFrac, dt: dt, rate: 0.3)
         ac.integrate(dt: dt)
         ac.altitude = groundY(ac.pos2)
         if ac.speed >= ac.kind.rotateSpeed {
@@ -808,9 +917,17 @@ extension SimEngine {
         }
     }
 
+    /// Ease pitch toward an explicit target at a rate cap (rad/s). Used where the
+    /// target is a rotation schedule, not a flight-path readout. Presentation-only.
+    private func drivePitch2(_ ac: Aircraft, target: Double, dt: Double, rate: Double = 0.35) {
+        let maxStep = rate * dt
+        ac.pitch += max(-maxStep, min(maxStep, target - ac.pitch))
+    }
+
     private func liftoff(_ ac: Aircraft, now: Double) {
         ac.phase = .climbingOut
-        ac.pitch = 0.14        // ~8° rotation
+        // No pitch snap — the rotation arc from updateTakeoffRoll has the nose
+        // near ~0.14 rad already, and the climbout pitch law carries it from here.
         ac.verticalSpeed = ac.kind.climbRate * 0.4
         ac.landingLightsOn = true
         completeMovement(ac, isLanding: false)
@@ -823,8 +940,12 @@ extension SimEngine {
     private func updateClimbout(_ ac: Aircraft, dt: Double) {
         ac.driveSpeed(toward: ac.kind.climbSpeed, accel: 2.0, decel: 1.0, dt: dt)
         ac.verticalSpeed += (ac.kind.climbRate - ac.verticalSpeed) * min(1, dt * 1.5)
-        ac.steer(toward: rw.heading22, maxRate: 0.1, dt: dt)
-        ac.pitch += (0.14 - ac.pitch) * min(1, dt * 2)
+        ac.steer(toward: rw.heading22, maxRate: 0.1, dt: dt, maxBank: maxBank(ac))
+        // True climb gradient + AoA via the one pitch law — the Comet's steep
+        // 15 m/s climb reads clearly nose-high, the Lark's shallow climb gentle.
+        drivePitch(ac, aoa: angleOfAttack(ac), dt: dt)
+        easeCrab(ac, toward: crabAngle(forGroundHeading: ac.heading, airspeed: ac.speed), dt: dt)
+        ac.throttle += (0.9 - ac.throttle) * min(1, dt * 2.5)
         ac.integrate(dt: dt)
         if ac.kind.hasRetractableGear && ac.gearDown && (ac.altitude - thrGroundY) >= 30 {
             ac.gearDown = false
@@ -1259,12 +1380,12 @@ extension SimEngine {
             if !ac.clearedToLand { c.append(.clearedToLand) }
             c.append(.goAround)
             // B15 — only offer expedite to a type that can actually make an
-            // early turnoff (the Comet cannot, so the verb isn't a scam).
-            if !ac.expedited && ac.kind != .comet60 { c.append(.expediteExit) }
+            // early turnoff (jets cannot, so the verb isn't a scam).
+            if !ac.expedited && !ac.kind.engineIsJet { c.append(.expediteExit) }
             return c
         case .flare, .rollout:
-            // B15 — no phantom expedite for the Comet.
-            return (ac.expedited || ac.kind == .comet60) ? [] : [.expediteExit]
+            // B15 — no phantom expedite for jets.
+            return (ac.expedited || ac.kind.engineIsJet) ? [] : [.expediteExit]
         case .exitingRunway, .taxiToApron, .taxiToRunway:
             return ac.holdingPosition ? [.continueTaxi] : [.holdPosition]
         case .holdingShort:

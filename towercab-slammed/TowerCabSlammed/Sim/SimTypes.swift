@@ -36,98 +36,66 @@ public struct AircraftID: Hashable, Codable, CustomStringConvertible {
     public var description: String { "AC\(raw)" }
 }
 
-/// PRD §4.4 near-types present at Catalina in the slice.
+/// The 16 REAL aircraft types in the fleet (real type names, fictional airlines).
+/// Every per-type number is data — see `spec` in AircraftCatalog.swift; the
+/// computed properties below just delegate, so movement/sim code that reads
+/// `kind.approachSpeed`, `kind.wingspanMeters`, etc. compiles unchanged.
 public enum AircraftKind: String, CaseIterable, Codable {
-    case lark72   // C172 analog — high-wing GA piston, fixed gear
-    case vela22   // SR22 analog — low-wing GA piston, fixed gear, faster
-    case comet60  // Challenger-class bizjet — the VIP that breaks the rhythm
+    // GA / light singles + twins
+    case c172           // Cessna 172 Skyhawk — high-wing piston, the everyman
+    case pa28           // Piper PA-28 Archer — low-wing piston
+    case c182           // Cessna 182 Skylane — heavier high-wing piston
+    case sr22           // Cirrus SR22 — fast composite piston single
+    case baron58        // Beechcraft Baron 58 — piston cabin twin
+    // Turboprops + heritage
+    case caravan        // Cessna 208 Caravan — utility turboprop single
+    case kingair350     // Beechcraft King Air 350 — cabin-class turboprop twin
+    case twinotter      // DHC-6 Twin Otter — STOL turboprop twin
+    case dc3            // Douglas DC-3 — the tailwheel heritage star
+    // Bizjets
+    case phenom300      // Embraer Phenom 300 — light jet
+    case challenger350  // Bombardier Challenger 350 — super-mid bizjet (the VIP)
+    // Airliners
+    case e175           // Embraer E175 — regional jet
+    case boeing737      // Boeing 737-800 — narrowbody
+    case airbus320      // Airbus A320 — narrowbody
+    case boeing777      // Boeing 777-300ER — widebody
+    case airbus380      // Airbus A380-800 — the whale
 
-    public var displayType: String {
-        switch self {
-        case .lark72: return "LK72"
-        case .vela22: return "VL22"
-        case .comet60: return "CM60"
-        }
-    }
+    public var displayType: String { spec.display }
     /// Approach speed over the fence, m/s.
-    public var approachSpeed: Double {
-        switch self {
-        case .lark72: return ktsToMps(65)
-        case .vela22: return ktsToMps(80)
-        case .comet60: return ktsToMps(115)
-        }
-    }
-    public var patternSpeed: Double {
-        switch self {
-        case .lark72: return ktsToMps(90)
-        case .vela22: return ktsToMps(110)
-        case .comet60: return ktsToMps(160)
-        }
-    }
-    public var climbSpeed: Double {
-        switch self {
-        case .lark72: return ktsToMps(75)
-        case .vela22: return ktsToMps(100)
-        case .comet60: return ktsToMps(150)
-        }
-    }
-    public var climbRate: Double {   // m/s vertical
-        switch self {
-        case .lark72: return 3.6
-        case .vela22: return 4.6
-        case .comet60: return 15.0
-        }
-    }
+    public var approachSpeed: Double { ktsToMps(spec.approachKt) }
+    public var patternSpeed: Double { ktsToMps(spec.patternKt) }
+    public var climbSpeed: Double { ktsToMps(spec.climbKt) }
+    public var climbRate: Double { spec.climbRateMps }   // m/s vertical
     /// Peak deceleration on rollout, m/s² (comfortable braking).
-    public var rolloutDecel: Double {
-        switch self {
-        case .lark72: return 1.8
-        case .vela22: return 2.0
-        case .comet60: return 2.6
-        }
-    }
+    public var rolloutDecel: Double { spec.rolloutDecel }
     /// Harder braking when told to expedite.
     public var expediteDecel: Double { rolloutDecel * 1.5 }
-    public var takeoffAccel: Double { // m/s²
-        switch self {
-        case .lark72: return 1.9
-        case .vela22: return 2.3
-        case .comet60: return 3.4
-        }
-    }
-    public var rotateSpeed: Double {
-        switch self {
-        case .lark72: return ktsToMps(55)
-        case .vela22: return ktsToMps(70)
-        case .comet60: return ktsToMps(120)
-        }
-    }
-    public var taxiSpeed: Double {
-        switch self {
-        case .lark72: return 7.0
-        case .vela22: return 7.5
-        case .comet60: return 9.0
-        }
-    }
-    public var hasRetractableGear: Bool { self == .comet60 }
-    public var wingspanMeters: Double {
-        switch self {
-        case .lark72: return 11.0
-        case .vela22: return 11.7
-        case .comet60: return 19.6
-        }
-    }
+    public var takeoffAccel: Double { spec.takeoffAccel } // m/s²
+    public var rotateSpeed: Double { ktsToMps(spec.rotateKt) }
+    public var taxiSpeed: Double { spec.taxiMps }
+    public var hasRetractableGear: Bool { spec.retractableGear }
+    public var wingspanMeters: Double { spec.wingspanM }
     /// Base points weight — bigger metal pays slightly more (flavor only).
-    public var movementWeight: Double { self == .comet60 ? 1.4 : 1.0 }
+    public var movementWeight: Double { spec.movementWeight }
 }
 
-/// PRD §4.5 fictional carriers relevant to KAVX, plus private GA.
+/// PRD §4.5 liveries: existing GA/Isla schemes + fictional airline carriers.
+/// FICTIONAL airlines only (never real liveries): Pacifica Air (mainline),
+/// Meridian Air (mainline), Altair Express (regional). `.houseWhite` is the
+/// neutral unbranded scheme. Existing cases stay — the models reference them.
 public enum Livery: String, CaseIterable, Codable {
     case islaTurquoise    // Isla Air — turquoise island commuter
     case islaClassic      // Isla Air retro cream variant
     case privateWhite     // private GA — white with maroon stripe
     case privateSunburst  // private GA — sunburst yellow/orange
-    case meridianVIP      // navy-and-gold — the Comet 60 VIP
+    case meridianVIP      // navy-and-gold — the bizjet VIP
+    // Fictional airline carriers (airliners) + neutral house scheme.
+    case pacifica         // Pacifica Air — deep-ocean blue cheatline on white
+    case meridianAir      // Meridian Air — teal/charcoal mainline scheme
+    case altairExpress    // Altair Express — regional, crimson cheatline
+    case houseWhite       // neutral unbranded white
 }
 
 public struct Callsign: Hashable, Codable {
@@ -392,6 +360,12 @@ public struct AircraftState {
     public var verticalSpeed: Double // m/s
     public var bank: Double          // radians, presentation hint
     public var pitch: Double         // radians, presentation hint
+    /// Nose-vs-ground-track yaw offset (crosswind crab). Presentation-only:
+    /// the deterministic ground track stays on `heading`; the renderer points
+    /// the fuselage at heading+crab. Never feeds position/score → determinism safe.
+    public var crab: Double          // radians
+    /// Engine power 0–1 for prop/fan blur + exhaust. Presentation-only.
+    public var throttle: Double
 
     public var gearDown: Bool
     public var landingLightsOn: Bool
@@ -413,6 +387,7 @@ public struct AircraftState {
     public init(id: AircraftID, kind: AircraftKind, livery: Livery, callsign: Callsign,
                 phase: FlightPhase, position: V3, heading: Double, speed: Double,
                 verticalSpeed: Double = 0, bank: Double = 0, pitch: Double = 0,
+                crab: Double = 0, throttle: Double = 0,
                 gearDown: Bool = true, landingLightsOn: Bool = false,
                 clearedToLand: Bool = false, clearedForTakeoff: Bool = false,
                 holdingPosition: Bool = false, delaySeconds: Double = 0,
@@ -421,6 +396,7 @@ public struct AircraftState {
         self.phase = phase; self.position = position; self.heading = heading
         self.speed = speed; self.verticalSpeed = verticalSpeed
         self.bank = bank; self.pitch = pitch
+        self.crab = crab; self.throttle = throttle
         self.gearDown = gearDown; self.landingLightsOn = landingLightsOn
         self.clearedToLand = clearedToLand; self.clearedForTakeoff = clearedForTakeoff
         self.holdingPosition = holdingPosition
@@ -439,16 +415,22 @@ public struct AircraftRenderState {
     public var heading: Double
     public var bank: Double
     public var pitch: Double
+    public var crab: Double          // radians, nose-vs-track (crosswind)
+    public var throttle: Double      // 0–1 engine power
     public var speed: Double
+    public var velocity: V3          // world m/s, for positional extrapolation
     public var gearDown: Bool
     public var landingLightsOn: Bool
     public var band: ConflictBand
     public init(id: AircraftID, kind: AircraftKind, livery: Livery, phase: FlightPhase,
-                position: V3, heading: Double, bank: Double, pitch: Double, speed: Double,
-                gearDown: Bool, landingLightsOn: Bool, band: ConflictBand) {
+                position: V3, heading: Double, bank: Double, pitch: Double,
+                crab: Double = 0, throttle: Double = 0, speed: Double,
+                velocity: V3 = .zero, gearDown: Bool, landingLightsOn: Bool, band: ConflictBand) {
         self.id = id; self.kind = kind; self.livery = livery; self.phase = phase
         self.position = position; self.heading = heading; self.bank = bank; self.pitch = pitch
-        self.speed = speed; self.gearDown = gearDown; self.landingLightsOn = landingLightsOn
+        self.crab = crab; self.throttle = throttle
+        self.speed = speed; self.velocity = velocity
+        self.gearDown = gearDown; self.landingLightsOn = landingLightsOn
         self.band = band
     }
 }

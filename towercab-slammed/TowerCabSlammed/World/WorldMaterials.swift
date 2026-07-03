@@ -224,14 +224,24 @@ enum WorldTex {
 
     /// Full-length runway texture. v=0 = threshold B (RWY 22, NE end).
     /// A3: 2019 re-poured CONCRETE — light-grey slabs with a visible joint
-    /// grid (~6×6 m), crisp, minimal rubber. A5: BASIC visual markings only —
-    /// numbers ("22"/"4") + centerline dashes, nothing else.
+    /// grid (~6×6 m), crisp. Now marked to spec (D-prem): threshold "piano
+    /// keys", aiming points, TDZ coded stripe groups, full-length side stripes,
+    /// FAA-stencil numerals, plus real rubber pads at both touchdown zones and
+    /// longitudinal weathering (traffic keel, bleached shoulders, joint weep).
     static func runway(lengthMeters: Double, widthMeters: Double) -> UIImage {
-        let W: CGFloat = 1024, H: CGFloat = 6144
+        let W: CGFloat = 1024, H: CGFloat = 8192   // ppmY ≈ 9 px/m — sharp near field
         let ppmX = W / CGFloat(widthMeters)          // ≈ 44.7 px/m across
-        let ppmY = H / CGFloat(lengthMeters)         // ≈ 6.7 px/m along
+        let ppmY = H / CGFloat(lengthMeters)         // ≈ 9.0 px/m along
+        let halfW = widthMeters / 2
         func X(_ metersFromCenter: Double) -> CGFloat { W / 2 + CGFloat(metersFromCenter) * ppmX }
         func Y(_ stationFrom22: Double) -> CGFloat { CGFloat(stationFrom22) * ppmY }
+        /// Filled rect in meter space (s along, offset across from centerline).
+        func fillM(_ ctx: CGContext, sFrom: Double, sTo: Double,
+                   xFrom: Double, xTo: Double) {
+            ctx.fill(CGRect(x: X(min(xFrom, xTo)), y: Y(min(sFrom, sTo)),
+                            width: CGFloat(abs(xTo - xFrom)) * ppmX,
+                            height: CGFloat(abs(sTo - sFrom)) * ppmY))
+        }
 
         return image(CGSize(width: W, height: H)) { ctx, size in
             // Fresh light-grey concrete base.
@@ -255,14 +265,48 @@ enum WorldTex {
                 s += slabAlong
             }
             // Fine aggregate noise + faint sun-bleach patches.
-            speckle(ctx, size: size, count: 5200, seed: 0xF00D,
+            speckle(ctx, size: size, count: 6900, seed: 0xF00D,
                     radius: 0.6...2.4,
                     colors: [(worldColor(0.72, 0.71, 0.69), 0.09),
                              (worldColor(0.46, 0.45, 0.44), 0.08),
                              (worldColor(0.58, 0.55, 0.50), 0.05)])
-            speckle(ctx, size: size, count: 90, seed: 0xF00E, radius: 40...160,
+            speckle(ctx, size: size, count: 120, seed: 0xF00E, radius: 40...200,
                     colors: [(worldColor(0.68, 0.67, 0.64), 0.06),
                              (worldColor(0.54, 0.53, 0.51), 0.05)])
+
+            // ---- Longitudinal form (before joints + paint) ----
+            // (1) Sun-bleached outer thirds: warm-light band hugging each edge.
+            for side in [-1.0, 1.0] {
+                let inner = halfW * 0.34
+                let colors = [worldColor(0.66, 0.65, 0.63, 0.34).cgColor,
+                              worldColor(0.66, 0.65, 0.63, 0.0).cgColor] as CFArray
+                if let g = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                      colors: colors, locations: [0, 1]) {
+                    ctx.saveGState()
+                    ctx.clip(to: CGRect(x: side < 0 ? 0 : X(inner), y: 0,
+                                        width: side < 0 ? X(-inner) : W - X(inner), height: H))
+                    ctx.drawLinearGradient(g,
+                        start: CGPoint(x: X(side * halfW), y: 0),
+                        end: CGPoint(x: X(side * inner), y: 0), options: [])
+                    ctx.restoreGState()
+                }
+            }
+            // (2) Traffic keel: cooler-grey darkening down the centerline where
+            // tyres track, strongest through the touchdown zones, fading at the
+            // ends. Drawn as two soft lobes flanking the painted centerline gap.
+            var keel = WorldRand(seed: 0x4EE1)
+            for _ in 0..<1500 {
+                let st = keel.range(70, lengthMeters - 70)
+                // heavier over both TDZs (~150–520 from each end)
+                let d22 = st, d04 = lengthMeters - st
+                let tdz = max(worldSmoothstep(560, 180, d22), worldSmoothstep(560, 180, d04))
+                let base = 0.20 + 0.55 * tdz
+                let off = keel.range(-1, 1)
+                let lateral = (off < 0 ? -1.0 : 1.0) * (1.4 + abs(off) * abs(off) * 4.4)
+                let w = keel.cgRange(10, 30), h = keel.cgRange(28, 90)
+                ctx.setFillColor(worldColor(0.40, 0.41, 0.44, 0.05 * base).cgColor)
+                ctx.fillEllipse(in: CGRect(x: X(lateral) - w / 2, y: Y(st) - h / 2, width: w, height: h))
+            }
 
             // Joint grid — crisp saw-cut lines.
             ctx.setStrokeColor(worldColor(0.40, 0.39, 0.38, 0.60).cgColor)
@@ -279,6 +323,23 @@ enum WorldTex {
                 ctx.addLine(to: CGPoint(x: x, y: H))
             }
             ctx.strokePath()
+            // (3) Joint weep-staining: a faint darker line just downhill of each
+            // transverse saw-cut (toward the lower thresholds off the 2.1% hump
+            // crest near midfield), implying rain-runoff staining.
+            let crest = lengthMeters / 2
+            s = slabAlong
+            var weep = WorldRand(seed: 0x57A1)
+            while s < lengthMeters {
+                let downhill: CGFloat = s < crest ? -1 : 1     // runs off toward nearer end
+                let a = weep.range(0.05, 0.13)
+                ctx.setStrokeColor(worldColor(0.34, 0.335, 0.32, a).cgColor)
+                ctx.setLineWidth(weep.cgRange(2.0, 3.6))
+                let y = Y(s) + downhill * weep.cgRange(2.5, 5.0)
+                ctx.move(to: CGPoint(x: weep.cgRange(0, W * 0.15), y: y))
+                ctx.addLine(to: CGPoint(x: weep.cgRange(W * 0.85, W), y: y))
+                ctx.strokePath()
+                s += slabAlong
+            }
             // A few hairline cracks only — it's a 2019 pour.
             ctx.setLineWidth(1.0)
             for _ in 0..<14 {
@@ -291,87 +352,306 @@ enum WorldTex {
                 }
                 ctx.strokePath()
             }
-            // Minimal rubber: a light kiss in the 22 touchdown zone only.
-            var r = WorldRand(seed: 0xB00B)
-            for _ in 0..<70 {
-                let st = r.range(140, 330)
-                let off = r.range(-1, 1)
-                let lateral = off * off * off * 4.8
-                let cx = X(lateral + (r.unit() > 0.5 ? 2.6 : -2.6))
-                let w = r.cgRange(8, 22), h = r.cgRange(30, 110)
-                ctx.setFillColor(worldColor(0.22, 0.22, 0.23, 0.07 * r.range(0.4, 1)).cgColor)
-                ctx.fillEllipse(in: CGRect(x: cx - w / 2, y: Y(st) - h / 2, width: w, height: h))
-            }
+            // (4) A couple of broad, sparse patch-repair discolour blotches.
+            speckle(ctx, size: size, count: 7, seed: 0x9A7C, radius: 70...200,
+                    colors: [(worldColor(0.56, 0.55, 0.53), 0.05),
+                             (worldColor(0.50, 0.50, 0.50), 0.045)])
 
-            // ---- Paint (A5: numbers + centerline ONLY) ----
+            // ---- Rubber pads: a real pair at BOTH touchdown zones ----
+            // 22 lands NE→SW (touchdown ~180–430 from the 22 threshold);
+            // 04 lands SW→NE (touchdown ~180–430 from the 04 end).
+            func rubberPad(centeredAt tc: Double, seed: UInt64) {
+                var r = WorldRand(seed: seed)
+                for _ in 0..<520 {
+                    // longitudinal falloff around the touchdown centre
+                    let st = tc + r.range(-140, 140)
+                    if st < 30 || st > lengthMeters - 30 { continue }
+                    let fall = worldSmoothstep(150, 0, abs(st - tc))
+                    // two lateral lobes ~±2.5 m; skip the painted centerline gap
+                    let sign: Double = r.unit() > 0.5 ? 1 : -1
+                    let lateral = sign * (1.4 + abs(r.range(-1, 1)) * 3.4)
+                    if abs(lateral) < 0.7 { continue }
+                    let w = r.cgRange(9, 26), h = r.cgRange(24, 90)
+                    let a = (0.10 + 0.12 * fall) * r.range(0.5, 1.0)
+                    ctx.setFillColor(worldColor(0.16, 0.16, 0.18, a).cgColor)
+                    ctx.fillEllipse(in: CGRect(x: X(lateral) - w / 2, y: Y(st) - h / 2, width: w, height: h))
+                }
+                // faint continuous keel smear along the centre of the pad
+                for _ in 0..<90 {
+                    let st = tc + r.range(-150, 150)
+                    if st < 30 || st > lengthMeters - 30 { continue }
+                    let w = r.cgRange(6, 16), h = r.cgRange(40, 120)
+                    ctx.setFillColor(worldColor(0.18, 0.18, 0.20, 0.05 * r.range(0.4, 1)).cgColor)
+                    ctx.fillEllipse(in: CGRect(x: X(r.range(-1.1, 1.1)) - w / 2,
+                                               y: Y(st) - h / 2, width: w, height: h))
+                }
+            }
+            rubberPad(centeredAt: 300, seed: 0xB00B)
+            rubberPad(centeredAt: lengthMeters - 300, seed: 0xB00C)
+
+            // ---- Paint (marked to spec) ----
             let paint = worldColor(0.94, 0.93, 0.90, 0.93)
             ctx.setFillColor(paint.cgColor)
+
+            // Full-length white side stripes (0.9 m wide, inset 0.9 m from edge).
+            let sideInset = 0.9, sideWide = 0.9
+            for side in [-1.0, 1.0] {
+                let outer = side * (halfW - sideInset)
+                let inner = outer - side * sideWide
+                fillM(ctx, sFrom: 6, sTo: lengthMeters - 6, xFrom: outer, xTo: inner)
+            }
+
+            // Threshold "piano keys" — 8 longitudinal bars, 1.75 m wide × 22.8 m,
+            // symmetric about the centerline, at both landing ends.
+            func pianoKeys(fromStation s0: Double, dir: Double) {
+                let barLen = 22.8, barWide = 1.75, gap = 1.9
+                // 4 bars each side of centre; centre gap ≈ centerline.
+                let start = s0 + dir * 6.0                 // ~6 m in from threshold
+                for k in 0..<4 {
+                    let x = 1.3 + Double(k) * (barWide + gap)   // outward from centre
+                    for sgn in [-1.0, 1.0] {
+                        let xo = sgn * x
+                        fillM(ctx, sFrom: start, sTo: start + dir * barLen,
+                              xFrom: xo, xTo: xo + (sgn < 0 ? -barWide : barWide))
+                    }
+                }
+            }
+            pianoKeys(fromStation: 0, dir: 1)                  // 22 end
+            pianoKeys(fromStation: lengthMeters, dir: -1)      // 04 end
+
+            // Aiming-point pair — two solid bars 4 m wide × 30 m, ±5 m off centre,
+            // ~300 m in from each landing threshold.
+            func aimingPoint(centre: Double) {
+                let barLen = 30.0, barWide = 4.0, off = 5.0
+                for sgn in [-1.0, 1.0] {
+                    let xo = sgn * off
+                    fillM(ctx, sFrom: centre - barLen / 2, sTo: centre + barLen / 2,
+                          xFrom: xo, xTo: xo + (sgn < 0 ? -barWide : barWide))
+                }
+            }
+            aimingPoint(centre: 300)
+            aimingPoint(centre: lengthMeters - 300)
+
+            // TDZ coded stripe groups — pairs of 22.5 m stripes flanking centre,
+            // stepping in from each threshold at 150 m intervals (first 2 groups).
+            func tdzGroup(fromStation s0: Double, dir: Double) {
+                let stripeLen = 22.5, stripeWide = 1.75, off = 1.3, lateralGap = 1.9
+                // group 1: two stripes per side; group 2: one stripe per side.
+                let groups = [(centre: s0 + dir * 150, perSide: 2),
+                              (centre: s0 + dir * 300, perSide: 1)]
+                for grp in groups {
+                    for sgn in [-1.0, 1.0] {
+                        for j in 0..<grp.perSide {
+                            let x = off + Double(j) * (stripeWide + lateralGap)
+                            let xo = sgn * x
+                            fillM(ctx, sFrom: grp.centre - dir * stripeLen / 2,
+                                  sTo: grp.centre + dir * stripeLen / 2,
+                                  xFrom: xo, xTo: xo + (sgn < 0 ? -stripeWide : stripeWide))
+                        }
+                    }
+                }
+            }
+            tdzGroup(fromStation: 0, dir: 1)
+            tdzGroup(fromStation: lengthMeters, dir: -1)
 
             // Centerline dashes (36.6 m dash / 24.4 m gap, 0.9 m wide).
             var cs = 66.0
             while cs + 36.6 < lengthMeters - 66 {
-                ctx.fill(CGRect(x: X(-0.45), y: Y(cs), width: 0.9 * ppmX, height: 36.6 * ppmY))
+                fillM(ctx, sFrom: cs, sTo: cs + 36.6, xFrom: -0.45, xTo: 0.45)
                 cs += 61.0
             }
-            // Numerals as thick stroke glyphs, 18 m tall (A5/D17).
-            // "22" reads to a pilot landing 22 (rotated); "4" upright (single
-            // digit — not "04").
-            strokeNumeral("22", ctx: ctx, center: CGPoint(x: W / 2, y: Y(45)),
-                          ppmX: ppmX, ppmY: ppmY, rotated: true, color: paint)
-            strokeNumeral("4", ctx: ctx, center: CGPoint(x: W / 2, y: Y(lengthMeters - 45)),
-                          ppmX: ppmX, ppmY: ppmY, rotated: false, color: paint)
 
-            // Subtle weathering over everything.
-            speckle(ctx, size: size, count: 420, seed: 0xDEAD, radius: 2...8,
+            // FAA-stencil numerals, 18 m tall. "22" reads to the pilot landing 22
+            // (rotated 180°); "4" upright (single digit — not "04").
+            faaNumeral("22", ctx: ctx, center: CGPoint(x: W / 2, y: Y(52)),
+                       ppmX: ppmX, ppmY: ppmY, rotated: true, color: paint)
+            faaNumeral("4", ctx: ctx, center: CGPoint(x: W / 2, y: Y(lengthMeters - 52)),
+                       ppmX: ppmX, ppmY: ppmY, rotated: false, color: paint)
+
+            // Subtle weathering over everything (also weathers the fresh paint).
+            speckle(ctx, size: size, count: 560, seed: 0xDEAD, radius: 2...8,
                     colors: [(worldColor(0.50, 0.49, 0.47), 0.08)])
         }
     }
 
-    /// FAA-style stroke glyphs, drawn in meter space (18 m tall, ~1.5 m stroke).
-    private static func strokeNumeral(_ text: String, ctx: CGContext, center: CGPoint,
-                                      ppmX: CGFloat, ppmY: CGFloat, rotated: Bool, color: UIColor) {
-        // Digit paths in a unit box (x 0…1 ≈ 6.2 m wide, y 0…1 = 18 m, y down).
-        func strokes(for ch: Character) -> [[CGPoint]] {
-            switch ch {
-            case "2":
-                return [[CGPoint(x: 0.06, y: 0.24), CGPoint(x: 0.16, y: 0.08),
-                         CGPoint(x: 0.50, y: 0.03), CGPoint(x: 0.84, y: 0.08),
-                         CGPoint(x: 0.94, y: 0.24), CGPoint(x: 0.88, y: 0.44),
-                         CGPoint(x: 0.10, y: 0.88), CGPoint(x: 0.06, y: 0.97),
-                         CGPoint(x: 0.94, y: 0.97)]]
-            case "4":
-                return [[CGPoint(x: 0.58, y: 0.03), CGPoint(x: 0.06, y: 0.60),
-                         CGPoint(x: 0.06, y: 0.66), CGPoint(x: 0.94, y: 0.66)],
-                        [CGPoint(x: 0.66, y: 0.34), CGPoint(x: 0.66, y: 0.97)]]
-            default:
-                return []
-            }
-        }
-        let heightM = 18.0, widthM = 6.2, gapM = 2.6, strokeM = 1.5
+    /// FAA runway-designation numerals rendered as filled glyphs matching the
+    /// rounded stencil character set: uniform thick stroke (~2.9 m) with rounded
+    /// terminals, 18 m tall. Each digit is a set of capsule strokes + arc bowls
+    /// so any runway number works. Drawn in meter space.
+    private static func faaNumeral(_ text: String, ctx: CGContext, center: CGPoint,
+                                   ppmX: CGFloat, ppmY: CGFloat, rotated: Bool, color: UIColor) {
+        let heightM = 18.0, widthM = 8.4, gapM = 2.4, strokeM = 2.9
+        let hw = strokeM / 2
         let digits = Array(text)
-        let totalW = Double(digits.count) * widthM + Double(digits.count - 1) * gapM
+        let totalW = Double(digits.count) * widthM + Double(max(digits.count - 1, 0)) * gapM
         ctx.saveGState()
         ctx.translateBy(x: center.x, y: center.y)
         if rotated { ctx.rotate(by: .pi) }
         ctx.scaleBy(x: ppmX, y: ppmY)          // now drawing in meters
-        ctx.setStrokeColor(color.cgColor)
-        ctx.setLineWidth(CGFloat(strokeM))
-        ctx.setLineCap(.round)
-        ctx.setLineJoin(.round)
-        for (i, ch) in digits.enumerated() {
-            let x0 = -totalW / 2 + Double(i) * (widthM + gapM)
-            for stroke in strokes(for: ch) {
-                guard let first = stroke.first else { continue }
-                ctx.move(to: CGPoint(x: CGFloat(x0) + first.x * CGFloat(widthM),
-                                     y: (first.y - 0.5) * CGFloat(heightM)))
-                for pt in stroke.dropFirst() {
-                    ctx.addLine(to: CGPoint(x: CGFloat(x0) + pt.x * CGFloat(widthM),
-                                            y: (pt.y - 0.5) * CGFloat(heightM)))
-                }
-                ctx.strokePath()
+        ctx.setFillColor(color.cgColor)
+
+        // Unit box: x 0…widthM (left→right), y 0…heightM (top→bottom).
+        // A capsule = a rounded-cap thick line between two points.
+        func capsule(_ ax: Double, _ ay: Double, _ bx: Double, _ by: Double) {
+            ctx.saveGState()
+            ctx.setLineCap(.round)
+            ctx.setLineJoin(.round)
+            ctx.setLineWidth(CGFloat(strokeM))
+            ctx.setStrokeColor(color.cgColor)
+            ctx.move(to: CGPoint(x: ax, y: ay))
+            ctx.addLine(to: CGPoint(x: bx, y: by))
+            ctx.strokePath()
+            ctx.restoreGState()
+        }
+        // A stroked arc segment (for rounded bowls), centre (cx,cy) radius r.
+        func arc(_ cx: Double, _ cy: Double, _ r: Double, _ a0: Double, _ a1: Double) {
+            ctx.saveGState()
+            ctx.setLineCap(.round)
+            ctx.setLineWidth(CGFloat(strokeM))
+            ctx.setStrokeColor(color.cgColor)
+            ctx.addArc(center: CGPoint(x: cx, y: cy), radius: CGFloat(r),
+                       startAngle: CGFloat(a0), endAngle: CGFloat(a1), clockwise: false)
+            ctx.strokePath()
+            ctx.restoreGState()
+        }
+
+        func glyph(_ ch: Character, ox: Double) {
+            let l = ox + hw, r = ox + widthM - hw          // inner stroke centres
+            let midx = ox + widthM / 2
+            let t = hw, b = heightM - hw                    // top / bottom centres
+            let midy = heightM / 2
+            let br = (widthM - strokeM) / 2                 // bowl radius (half width)
+            switch ch {
+            case "0":
+                capsule(l, midy - br * 0.55, l, midy + br * 0.55)   // left side
+                capsule(r, midy - br * 0.55, r, midy + br * 0.55)   // right side
+                arc(midx, t + br * 0.55, br, .pi, 2 * .pi)          // top bowl
+                arc(midx, b - br * 0.55, br, 0, .pi)                // bottom bowl
+            case "1":
+                capsule(midx, t, midx, b)
+                capsule(midx - br * 0.7, t + br * 0.5, midx, t)     // flag
+                capsule(l, b, r, b)                                 // base serif
+            case "2":
+                arc(midx, t + br, br, .pi, 2 * .pi + 0.5)           // top round
+                capsule(r, t + br * 0.6, midx - br * 0.2, midy + br * 0.2) // diagonal
+                capsule(midx - br * 0.2, midy + br * 0.2, l, b)     // to lower-left
+                capsule(l, b, r, b)                                 // base
+            case "3":
+                arc(midx, t + br, br, .pi + 0.4, 2 * .pi + 0.9)     // top bowl
+                arc(midx, b - br, br, -0.9, .pi - 0.4)             // bottom bowl
+                capsule(midx + br * 0.2, midy, r - br * 0.05, midy) // mid nib
+            case "4":
+                capsule(r, t, r, b)                                 // right stem
+                capsule(r, t, l, midy + br * 0.35)                 // diagonal
+                capsule(l, midy + br * 0.35, r + hw, midy + br * 0.35) // crossbar
+            case "5":
+                capsule(r, t, l, t)                                 // top bar
+                capsule(l, t, l, midy)                             // left stem
+                capsule(l, midy, midx, midy)                       // into bowl
+                arc(midx, b - br, br, -1.0, .pi - 0.3)            // bottom bowl
+            case "6":
+                arc(midx, b - br, br, 0, 2 * .pi)                 // bottom loop
+                capsule(l, b - br, l, t + br * 0.6)               // left stem up
+                arc(midx, t + br * 0.6, br, .pi, 2 * .pi - 0.6)   // top curl
+            case "7":
+                capsule(l, t, r, t)                                // top bar
+                capsule(r, t, midx - br * 0.2, b)                 // diagonal down
+            case "8":
+                arc(midx, t + br * 0.8, br * 0.85, 0, 2 * .pi)    // top loop
+                arc(midx, b - br * 0.9, br, 0, 2 * .pi)           // bottom loop
+            case "9":
+                arc(midx, t + br, br, 0, 2 * .pi)                // top loop
+                capsule(r, t + br, r, b - br * 0.6)              // right stem down
+                arc(midx, b - br * 0.6, br, 0.6, .pi)           // bottom curl
+            default:
+                break
             }
         }
+
+        for (i, ch) in digits.enumerated() {
+            let x0 = -totalW / 2 + Double(i) * (widthM + gapM)
+            // draw with origin at glyph top-left, y grows downward, box centred.
+            ctx.saveGState()
+            ctx.translateBy(x: 0, y: -heightM / 2)
+            glyph(ch, ox: x0)
+            ctx.restoreGState()
+        }
         ctx.restoreGState()
+    }
+
+    // MARK: - Concrete micro detail maps (runway normal + roughness)
+
+    /// Fine tiling normal map for the concrete: soft aggregate bumps plus faint
+    /// directional saw-cut grooves, so joints/aggregate catch a micro-highlight
+    /// under the golden-hour key. Tuned to tile at ~2 m across the runway.
+    static func concreteNormal() -> UIImage? {
+        let n = 128
+        var height = [Double](repeating: 0, count: n * n)
+        var rng = WorldRand(seed: 0xC0DE)
+        for i in 0..<(n * n) { height[i] = rng.unit() }
+        // two smoothing passes → soft aggregate, no sharp pixel noise
+        for _ in 0..<2 {
+            var smooth = height
+            for y in 0..<n {
+                for x in 0..<n {
+                    var acc = 0.0
+                    for dy in -1...1 {
+                        for dx in -1...1 {
+                            acc += height[((y + dy + n) % n) * n + ((x + dx + n) % n)]
+                        }
+                    }
+                    smooth[y * n + x] = acc / 9.0
+                }
+            }
+            height = smooth
+        }
+        // Carve two faint horizontal grooves (saw-cut micro relief) per tile.
+        for gy in [n / 3, (2 * n) / 3] {
+            for x in 0..<n { height[gy * n + x] -= 0.25; height[((gy + 1) % n) * n + x] -= 0.15 }
+        }
+        var bytes = [UInt8](repeating: 255, count: n * n * 4)
+        let amp = 1.6
+        for y in 0..<n {
+            for x in 0..<n {
+                let hx = (height[y * n + (x + 1) % n] - height[y * n + (x + n - 1) % n]) * amp
+                let hy = (height[((y + 1) % n) * n + x] - height[((y + n - 1) % n) * n + x]) * amp
+                var v = SIMD3(-hx, -hy, 1)
+                v = simd_normalize(v)
+                let i = (y * n + x) * 4
+                bytes[i] = UInt8((v.x * 0.5 + 0.5) * 255)
+                bytes[i + 1] = UInt8((v.y * 0.5 + 0.5) * 255)
+                bytes[i + 2] = UInt8((v.z * 0.5 + 0.5) * 255)
+            }
+        }
+        let data = Data(bytes) as CFData
+        guard let provider = CGDataProvider(data: data),
+              let cg = CGImage(width: n, height: n, bitsPerComponent: 8, bitsPerPixel: 32,
+                               bytesPerRow: n * 4, space: CGColorSpaceCreateDeviceRGB(),
+                               bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+                               provider: provider, decode: nil, shouldInterpolate: true,
+                               intent: .defaultIntent) else { return nil }
+        return UIImage(cgImage: cg)
+    }
+
+    /// Fine tiling roughness map for the concrete: aggregate reads rougher, the
+    /// saw-cut grooves slightly glossier (sealer/water) so they catch a thin
+    /// specular line at golden hour. Grey = roughness (dark = smoother).
+    static func concreteRoughness() -> UIImage {
+        image(CGSize(width: 128, height: 128)) { ctx, size in
+            ctx.setFillColor(UIColor(white: 0.66, alpha: 1).cgColor)   // base rough
+            ctx.fill(CGRect(origin: .zero, size: size))
+            // rough aggregate speckle (lighter = rougher)
+            speckle(ctx, size: size, count: 900, seed: 0xC0D1, radius: 1...4,
+                    colors: [(UIColor(white: 0.82, alpha: 1), 0.30),
+                             (UIColor(white: 0.52, alpha: 1), 0.22)], wrap: true)
+            // glossier saw-cut grooves (darker bands)
+            ctx.setStrokeColor(UIColor(white: 0.34, alpha: 0.85).cgColor)
+            ctx.setLineWidth(4)
+            for gy in [size.height / 3, size.height * 2 / 3] {
+                ctx.move(to: CGPoint(x: 0, y: gy)); ctx.addLine(to: CGPoint(x: size.width, y: gy))
+            }
+            ctx.strokePath()
+        }
     }
 
     /// Tileable taxiway/apron pavement — older grey-worn concrete/asphalt mix,
@@ -1089,6 +1369,8 @@ enum WorldMat {
     }()
     static let dirtPad: SCNMaterial = pbr(WorldTex.dirtPad(), roughness: 0.97, wrap: true)
     static let stripeYellow: SCNMaterial = pbr(worldColor(0.83, 0.66, 0.12), roughness: 0.7)
+    /// Gloss-guard border under taxiway centerlines (dark, matte).
+    static let taxiGuardBlack: SCNMaterial = pbr(worldColor(0.10, 0.10, 0.11), roughness: 0.85)
     static let corrugatedCream: SCNMaterial = pbr(
         WorldTex.corrugated(r: 0.83, g: 0.77, b: 0.66, rust: 1.0, seed: 0x41), roughness: 0.55,
         metalness: 0.25, wrap: true)

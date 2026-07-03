@@ -26,6 +26,11 @@ final class CameraRig: NSObject {
     private let pitchRange = (-0.62)...(0.55)
     private let fovRange = 20.0...110.0
 
+    // Look sensitivity — a full-screen drag sweeps a big arc so you can survey
+    // the whole 360° cab in a stroke or two, and a flick keeps gliding around.
+    private let lookYawSensitivity = 2.1
+    private let lookPitchSensitivity = 1.35
+
     // Strip-snap animation (C15: pure lerp of an eased t from a captured pose).
     private struct Pose { var yaw: Double; var pitch: Double; var fov: Double }
     private var snapStart: Pose?
@@ -90,10 +95,11 @@ final class CameraRig: NSObject {
             fov = start.fov + (target.fov - start.fov) * e
             if snapProgress >= 1 { snapStart = nil; snapTarget = nil }
         } else {
-            // Flick-pan glides ~0.6 s to rest.
+            // Flick-pan glides ~1 s to rest — a hard flick coasts a big arc so
+            // you can spin around the cab and let it settle.
             yaw += yawVelocity * dt
             pitch += pitchVelocity * dt
-            let damp = exp(-dt * 5.2)
+            let damp = exp(-dt * 3.0)
             yawVelocity *= damp
             pitchVelocity *= damp
         }
@@ -162,16 +168,16 @@ final class CameraRig: NSObject {
         switch g.state {
         case .changed:
             let t = g.translation(in: view)
-            yaw -= Double(t.x) * radPerPoint
-            pitch += Double(t.y) * radPerPoint
+            yaw -= Double(t.x) * radPerPoint * lookYawSensitivity
+            pitch += Double(t.y) * radPerPoint * lookPitchSensitivity
             pitch = min(max(pitch, pitchRange.lowerBound), pitchRange.upperBound)
             g.setTranslation(.zero, in: view)
             yawVelocity = 0; pitchVelocity = 0
             apply()
         case .ended:
             let v = g.velocity(in: view)
-            yawVelocity = -Double(v.x) * radPerPoint
-            pitchVelocity = Double(v.y) * radPerPoint
+            yawVelocity = -Double(v.x) * radPerPoint * lookYawSensitivity
+            pitchVelocity = Double(v.y) * radPerPoint * lookPitchSensitivity
         default: break
         }
     }

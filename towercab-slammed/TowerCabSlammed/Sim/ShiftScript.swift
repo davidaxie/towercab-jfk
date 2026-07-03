@@ -79,8 +79,9 @@ struct ShiftScript {
             var isArrival = rng.chance(pArrival)
             arrivalsMinusDepartures += isArrival ? 1 : -1
 
-            let roll = rng.double(in: 0...1)
-            let kind: AircraftKind = roll < 0.45 ? .lark72 : (roll < 0.80 ? .vela22 : .comet60)
+            // Rarity-weighted pick over the types this airport accepts (KAVX =
+            // GA + turboprops + the DC-3, no jets). Deterministic on the RNG.
+            let kind = AircraftKind.weightedKind(spawnableAt: airport, rng: &rng)
             let straightIn = rng.chance(0.5)
 
             // B1/B13 — authoring guard. Consecutive arrivals keep ≥26 s spawn
@@ -150,30 +151,107 @@ struct ShiftScript {
         }.joined(separator: "-")
     }
 
+    /// Short spoken type prefix for GA / bizjet N-number callsigns, e.g. a C172
+    /// checks in as "Skyhawk 734RT". Real type names, no airline.
+    private static func spokenTypePrefix(_ kind: AircraftKind) -> String {
+        switch kind {
+        case .c172:          return "Skyhawk"
+        case .pa28:          return "Archer"
+        case .c182:          return "Skylane"
+        case .sr22:          return "Cirrus"
+        case .baron58:       return "Baron"
+        case .caravan:       return "Caravan"
+        case .kingair350:    return "King Air"
+        case .twinotter:     return "Twin Otter"
+        case .dc3:           return "Douglas"
+        case .phenom300:     return "Phenom"
+        case .challenger350: return "Challenger"
+        // Airliners never use the type prefix (they get airline callsigns), but
+        // provide a sane fallback for completeness.
+        case .e175:          return "Embraer"
+        case .boeing737, .airbus320, .boeing777, .airbus380: return "Heavy"
+        }
+    }
+
+    /// Fictional carrier: display prefix (strip), spoken airline word, callsign
+    /// telephony, and the livery to paint. FICTIONAL only — no real airlines.
+    private struct Carrier {
+        let displayPrefix: String   // e.g. "PCA"
+        let spoken: String          // e.g. "Pacifica"
+        let livery: Livery
+    }
+    private static let mainlineCarriers: [Carrier] = [
+        Carrier(displayPrefix: "PCA", spoken: "Pacifica", livery: .pacifica),
+        Carrier(displayPrefix: "MER", spoken: "Meridian", livery: .meridianAir),
+    ]
+    private static let regionalCarriers: [Carrier] = [
+        Carrier(displayPrefix: "ALT", spoken: "Altair", livery: .altairExpress),
+    ]
+
     private static func makeIdentity(kind: AircraftKind, rng: inout SeededRNG,
                                      usedIsla: inout Set<Int>,
                                      usedTail: inout Set<String>) -> (Callsign, Livery) {
-        if kind == .comet60 {
-            // VIP bizjet: N6xCM, "Comet Six-One-Charlie-Mike".
-            // B28 — bounded search (only 10 candidates exist), serial fallback.
+        let sizeClass = kind.spec.sizeClass
+
+        // --- Airliners (regional / narrowbody / widebody): airline flight-number
+        //     callsigns using fictional carriers + their liveries. ------------
+        if sizeClass >= .regional {
+            let pool = sizeClass == .regional ? regionalCarriers : mainlineCarriers
+            // Deterministic carrier pick off the RNG.
+            let carrier = pool[Int(rng.double(in: 0...Double(pool.count) - 0.01))]
+            // Bounded unique flight number (100…999). Tail set doubles as the
+            // uniqueness ledger keyed on "<PREFIX><flight>".
+            var flight = 0
+            var key = ""
+            var attempts = 0
+            repeat {
+                flight = 100 + Int(rng.double(in: 0...899.99))
+                key = "\(carrier.displayPrefix)\(flight)"
+                attempts += 1
+            } while usedTail.contains(key) && attempts < 40
+            if usedTail.contains(key) {
+                var serial = 100
+                repeat { flight = serial; key = "\(carrier.displayPrefix)\(flight)"; serial += 1 }
+                    while usedTail.contains(key)
+            }
+            usedTail.insert(key)
+            return (Callsign(display: "\(carrier.displayPrefix) \(flight)",
+                             spoken: "\(carrier.spoken) \(spokenDigits(String(flight)))"),
+                    carrier.livery)
+        }
+
+        // --- Bizjets (light/super-mid): N-number tail, spoken with the type
+        //     prefix, in the navy-and-gold VIP scheme. --------------------------
+        if sizeClass == .bizjet {
+            // NxxLL biz tail; "Challenger 6JC", etc. Bounded search + serial fb.
+            let letters = "ABCDEFGHJKLMNPQRSTUVWXYZ"
             var tail = ""
             var attempts = 0
             repeat {
-                tail = "N6\(Int(rng.double(in: 0...9.99)))CM"
+                let d1 = Int(rng.double(in: 0...9.99))
+                let d2 = Int(rng.double(in: 0...9.99))
+                let l1 = letters[letters.index(letters.startIndex, offsetBy: Int(rng.double(in: 0...23.99)))]
+                let l2 = letters[letters.index(letters.startIndex, offsetBy: Int(rng.double(in: 0...23.99)))]
+                tail = "N\(d1)\(d2)\(l1)\(l2)"
                 attempts += 1
-            } while usedTail.contains(tail) && attempts < 12
+            } while usedTail.contains(tail) && attempts < 40
             if usedTail.contains(tail) {
                 var serial = 10
-                repeat { tail = "N\(600 + serial)CM"; serial += 1 } while usedTail.contains(tail)
+                repeat { tail = "N\(serial)JX"; serial += 1 } while usedTail.contains(tail)
             }
             usedTail.insert(tail)
-            let digits = String(tail.dropFirst().dropLast(2))
+            let body = String(tail.dropFirst())
             return (Callsign(display: tail,
-                             spoken: "Comet \(spokenDigits(digits))-Charlie-Mike"),
+                             spoken: "\(spokenTypePrefix(kind)) \(spokenDigits(body))"),
                     .meridianVIP)
         }
-        // lark72 / vela22: Isla Air commuter or private GA.
-        if rng.chance(0.45) {
+
+        // --- GA / turboprop / heritage: optional Isla Air commuter flavor for
+        //     the smaller types, otherwise a private N-number in the type's own
+        //     spoken prefix. -----------------------------------------------------
+        // Keep the Isla commuter feel for the light singles/twins only.
+        let islaEligible = sizeClass == .light || sizeClass == .cabinTwin
+        if islaEligible && rng.chance(0.40) {
             var flight = 0
             repeat { flight = 201 + Int(rng.double(in: 0...48.99)) } while usedIsla.contains(flight)
             usedIsla.insert(flight)
@@ -194,7 +272,7 @@ struct ShiftScript {
                              spoken: "Isla \(digitWords[flight / 100])-\(pairWord)"),
                     livery)
         }
-        // GA N-number: N7d4dLL — "Lark Seven-Three-Four-Romeo-Tango".
+        // Private N-number: N7d4dLL — "Skyhawk Seven-Three-Four-Romeo-Tango".
         let letters = "ABCDEFGHJKLMNPQRSTUVWXYZ"
         var tail = ""
         var attempts = 0                                    // B28 — bounded
@@ -212,8 +290,10 @@ struct ShiftScript {
         }
         usedTail.insert(tail)
         let body = String(tail.dropFirst())
-        let name = kind == .lark72 ? "Lark" : "Vela"
+        // Private GA paints white or sunburst; turboprops/DC-3 lean neutral white.
         let livery: Livery = rng.chance(0.55) ? .privateWhite : .privateSunburst
-        return (Callsign(display: tail, spoken: "\(name) \(spokenDigits(body))"), livery)
+        return (Callsign(display: tail,
+                         spoken: "\(spokenTypePrefix(kind)) \(spokenDigits(body))"),
+                livery)
     }
 }

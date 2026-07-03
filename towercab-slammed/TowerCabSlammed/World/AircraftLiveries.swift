@@ -73,6 +73,47 @@ extension Livery {
                 accent: UIColor(red: 0.86, green: 0.67, blue: 0.24, alpha: 1),
                 nose: nil, wingtip: nil, accentStripe: false,
                 roughness: 0.18, metalness: 0.35)
+        // --- Fictional airline carriers (airliners) + neutral house scheme ---
+        case .pacifica:
+            // Pacifica Air — deep ocean-blue cheatline + navy fin on white.
+            return LiveryPalette(
+                body: UIColor(red: 0.96, green: 0.97, blue: 0.98, alpha: 1),
+                belly: nil,
+                tail: UIColor(red: 0.06, green: 0.24, blue: 0.48, alpha: 1),
+                cheat: UIColor(red: 0.08, green: 0.42, blue: 0.72, alpha: 1),
+                accent: UIColor(red: 0.06, green: 0.24, blue: 0.48, alpha: 1),
+                nose: nil, wingtip: nil, accentStripe: false,
+                roughness: 0.30, metalness: 0.12)
+        case .meridianAir:
+            // Meridian Air — teal cheatline + charcoal fin on light grey.
+            return LiveryPalette(
+                body: UIColor(red: 0.93, green: 0.94, blue: 0.94, alpha: 1),
+                belly: nil,
+                tail: UIColor(red: 0.14, green: 0.17, blue: 0.19, alpha: 1),
+                cheat: UIColor(red: 0.06, green: 0.55, blue: 0.55, alpha: 1),
+                accent: UIColor(red: 0.06, green: 0.55, blue: 0.55, alpha: 1),
+                nose: nil, wingtip: nil, accentStripe: false,
+                roughness: 0.32, metalness: 0.10)
+        case .altairExpress:
+            // Altair Express — regional; crimson cheatline + fin on white.
+            return LiveryPalette(
+                body: UIColor(red: 0.97, green: 0.97, blue: 0.96, alpha: 1),
+                belly: nil,
+                tail: UIColor(red: 0.68, green: 0.10, blue: 0.16, alpha: 1),
+                cheat: UIColor(red: 0.80, green: 0.14, blue: 0.20, alpha: 1),
+                accent: UIColor(red: 0.68, green: 0.10, blue: 0.16, alpha: 1),
+                nose: nil, wingtip: nil, accentStripe: false,
+                roughness: 0.34, metalness: 0.08)
+        case .houseWhite:
+            // Neutral unbranded white with a soft grey cheatline.
+            return LiveryPalette(
+                body: UIColor(red: 0.95, green: 0.95, blue: 0.95, alpha: 1),
+                belly: nil,
+                tail: UIColor(red: 0.95, green: 0.95, blue: 0.95, alpha: 1),
+                cheat: UIColor(red: 0.55, green: 0.57, blue: 0.60, alpha: 1),
+                accent: UIColor(red: 0.55, green: 0.57, blue: 0.60, alpha: 1),
+                nose: nil, wingtip: nil, accentStripe: false,
+                roughness: 0.36, metalness: 0.05)
         }
     }
 }
@@ -154,7 +195,7 @@ enum ArtTextures {
                 }
 
                 if let cheat = pal.cheat {
-                    let uCheat: CGFloat = kind == .comet60 ? 0.225 : 0.245
+                    let uCheat: CGFloat = kind.engineIsJet ? 0.225 : 0.245
                     // D27: doubled widths + deepened color so cheat lines carry at range.
                     cheat.deepened(0.85).setFill()
                     for u in [uCheat, 1 - uCheat] {
@@ -163,7 +204,7 @@ enum ArtTextures {
                     }
                 }
 
-                if kind == .comet60 {
+                if kind.engineIsJet {
                     let glass = UIColor(red: 0.02, green: 0.07, blue: 0.08, alpha: 1)
                     // Cabin windows — a row of ovals down each side.
                     for i in 0..<9 {
@@ -252,6 +293,67 @@ enum ArtTextures {
                 tip.lineWidth = 3.5
                 UIColor(white: 0.8, alpha: 0.22).setStroke()
                 tip.stroke()
+            }
+        }
+    }
+
+    /// Cool-tinted radial blur disc for a spinning turbofan intake. Jets always
+    /// read blurred — this is denser at the hub and carries a faint steel tint
+    /// so it never looks like a bare prop. Additive-friendly (bright center).
+    static func fanBlur() -> UIImage {
+        image("fanBlur") {
+            let s: CGFloat = 256
+            return UIGraphicsImageRenderer(size: CGSize(width: s, height: s), format: ArtTextures.stdFormat).image { ctx in
+                let cg = ctx.cgContext
+                let c = CGPoint(x: s / 2, y: s / 2)
+                // Cool steel-blue tint, denser toward the hub than a prop disc.
+                let tint = UIColor(red: 0.62, green: 0.68, blue: 0.78, alpha: 1)
+                let colors = [tint.withAlphaComponent(0.34).cgColor,
+                              tint.withAlphaComponent(0.24).cgColor,
+                              tint.withAlphaComponent(0.15).cgColor,
+                              tint.withAlphaComponent(0.05).cgColor,
+                              tint.withAlphaComponent(0).cgColor] as CFArray
+                let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                      colors: colors, locations: [0.0, 0.28, 0.6, 0.9, 1.0])!
+                cg.drawRadialGradient(grad, startCenter: c, startRadius: 0,
+                                      endCenter: c, endRadius: s / 2, options: [])
+                // Tight circumferential streaks — the fine-pitch fan-blade read.
+                for i in 0..<40 {
+                    let f = CGFloat(i)
+                    let radius = s * (0.10 + fmod(f * 0.617, 1.0) * 0.36)
+                    let start = f * 1.37
+                    let alpha = 0.02 + fmod(f * 0.271, 1.0) * 0.04
+                    let p = UIBezierPath(arcCenter: c, radius: radius,
+                                         startAngle: start, endAngle: start + 0.9, clockwise: true)
+                    p.lineWidth = 1.2
+                    UIColor(white: 0.82, alpha: alpha).setStroke()
+                    p.stroke()
+                }
+                // Bright spinner glint at the very center.
+                let core = UIBezierPath(arcCenter: c, radius: s * 0.06,
+                                        startAngle: 0, endAngle: .pi * 2, clockwise: true)
+                UIColor(white: 0.95, alpha: 0.22).setFill()
+                core.fill()
+            }
+        }
+    }
+
+    /// Warm, soft directional smudge for the jet heat-wash behind a nacelle.
+    /// Elongated bright core fading to nothing; golden-hour tint, no gray smoke.
+    static func heatWash() -> UIImage {
+        image("heatWash") {
+            let W: CGFloat = 128, H: CGFloat = 128
+            return UIGraphicsImageRenderer(size: CGSize(width: W, height: H), format: ArtTextures.stdFormat).image { ctx in
+                let cg = ctx.cgContext
+                let c = CGPoint(x: W / 2, y: H / 2)
+                let warm = UIColor(red: 1.0, green: 0.72, blue: 0.42, alpha: 1)
+                let colors = [warm.withAlphaComponent(0.55).cgColor,
+                              warm.withAlphaComponent(0.22).cgColor,
+                              warm.withAlphaComponent(0).cgColor] as CFArray
+                let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                      colors: colors, locations: [0, 0.5, 1])!
+                cg.drawRadialGradient(grad, startCenter: c, startRadius: 0,
+                                      endCenter: c, endRadius: W / 2, options: [])
             }
         }
     }

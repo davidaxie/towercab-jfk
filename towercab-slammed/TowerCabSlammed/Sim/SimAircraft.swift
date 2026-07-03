@@ -26,6 +26,12 @@ final class Aircraft {
     var verticalSpeed: Double = 0
     var bank: Double = 0
     var pitch: Double = 0
+    /// Nose-vs-ground-track yaw offset for crosswind (radians). PRESENTATION-ONLY:
+    /// the fuselage points at heading+crab; the deterministic ground track stays
+    /// on `heading`. Never feeds position/verticalSpeed/heading/scoring/RNG.
+    var crab: Double = 0
+    /// Engine power 0–1 for prop/fan blur + exhaust. PRESENTATION-ONLY.
+    var throttle: Double = 0
     var gearDown = true
     var landingLightsOn = false
 
@@ -110,20 +116,35 @@ final class Aircraft {
     }
 
     /// Rate-limited turn toward a heading; updates bank as the presentation hint.
-    func steer(toward target: Double, maxRate: Double, dt: Double) {
+    /// `maxBank` is the coordinated-bank ceiling for this type (GA ~0.65 rad,
+    /// Comet ~0.5 rad). Bank is PRESENTATION-ONLY — it eases toward the TRUE
+    /// coordinated value for the turn actually being flown and never affects the
+    /// (rate-limited) heading integration, so determinism is untouched.
+    func steer(toward target: Double, maxRate: Double, dt: Double, maxBank: Double = 0.65) {
         let d = angleDelta(from: heading, to: target)
         let rate = max(-maxRate, min(maxRate, d / dt))
         heading += rate * dt
         heading = heading.truncatingRemainder(dividingBy: .pi * 2)
-        let targetBank = atan((rate * max(speed, 15)) / 9.81)
-        bank += (max(-0.45, min(0.45, targetBank)) - bank) * min(1, dt * 4)
+        // TRUE coordinated bank for the turn rate being flown, ceiling per type.
+        let idealBank = atan((rate * max(speed, 15)) / 9.81)
+        let targetBank = max(-maxBank, min(maxBank, idealBank))
+        rollBank(toward: targetBank, dt: dt)
     }
 
     /// Steer toward a 2D point (pure pursuit).
-    func steer(toPoint p: V2, maxRate: Double, dt: Double) {
+    func steer(toPoint p: V2, maxRate: Double, dt: Double, maxBank: Double = 0.65) {
         let d = p - pos2
         guard simd_length(d) > 1 else { return }
-        steer(toward: directionHeading(simd_normalize(d)), maxRate: maxRate, dt: dt)
+        steer(toward: directionHeading(simd_normalize(d)), maxRate: maxRate, dt: dt, maxBank: maxBank)
+    }
+
+    /// Ease `bank` toward a target with an aileron-roll rate limit (~0.6 rad/s),
+    /// so roll-in/roll-out reads as a real ~0.6–1 s roll rather than a snap.
+    /// PRESENTATION-ONLY.
+    func rollBank(toward target: Double, dt: Double, rollRate: Double = 0.6) {
+        let maxStep = rollRate * dt
+        let delta = target - bank
+        bank += max(-maxStep, min(maxStep, delta))
     }
 
     /// Accelerate/decelerate toward a target speed with a rate cap.
@@ -192,6 +213,7 @@ final class Aircraft {
         AircraftState(id: id, kind: kind, livery: livery, callsign: callsign,
                       phase: phase, position: position, heading: heading, speed: speed,
                       verticalSpeed: verticalSpeed, bank: bank, pitch: pitch,
+                      crab: crab, throttle: throttle,
                       gearDown: gearDown, landingLightsOn: landingLightsOn,
                       clearedToLand: clearedToLand, clearedForTakeoff: clearedForTakeoff,
                       holdingPosition: holdingPosition, delaySeconds: delaySeconds,

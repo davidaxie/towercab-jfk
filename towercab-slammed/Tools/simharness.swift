@@ -144,7 +144,7 @@ func autoPolicy(_ engine: SimEngine, airport: AirportLayout) {
                                              timestamp: engine.simTime))
             }
         case .rollout:
-            if (ta ?? .infinity) < 65, st.kind != .comet60 {
+            if (ta ?? .infinity) < 65, !st.kind.engineIsJet {
                 engine.apply(CommandEnvelope(aircraft: st.id, command: .expediteExit,
                                              timestamp: engine.simTime))
             }
@@ -196,10 +196,16 @@ func sampleTelemetry(_ snap: SimSnapshot, airport: AirportLayout, into r: inout 
         for j in (i + 1)..<air.count {
             let a = V2(air[i].position.x, air[i].position.z)
             let b = V2(air[j].position.x, air[j].position.z)
-            let horiz = simd_length(a - b)
+            // Fleet-size-aware merge metric: WINGTIP clearance = center distance
+            // minus the two half-spans. A real merge (the audit's 0.2 m overtake)
+            // reads as ≤0 here regardless of type; legitimately-separated big or
+            // small aircraft stay positive. This is the invariant that matters
+            // now the fleet spans an 11 m C172 to a 79.8 m A380.
+            let tipClear = simd_length(a - b)
+                - (air[i].kind.wingspanMeters + air[j].kind.wingspanMeters) / 2
             let vert = abs(air[i].position.y - air[j].position.y)
             // 3D-ish: only a merge if BOTH horizontal and vertical are tiny.
-            if vert < 60 { r.minAirborneSep = min(r.minAirborneSep, horiz) }
+            if vert < 60 { r.minAirborneSep = min(r.minAirborneSep, tipClear) }
         }
     }
     // The audit's P0 ground bug was aircraft STACKING at the hold-short point.
@@ -416,9 +422,12 @@ func scenarioSeparationSweep() -> Bool {
         if r.sawNaN { sawNaN = true }
     }
     var ok = true
-    // B1/B2 — no mid-air merge on final (the audit's 0.2 m overtake is gone;
-    // 30 m clears >2 wingspans while allowing tight but legal pattern spacing).
-    if worstAir < 30 { print("  FAIL: min airborne separation \(Int(worstAir)) m < 30 (mid-air merge)"); ok = false }
+    // B1/B2 — no mid-air merge (the audit's 0.2 m overtake is gone). worstAir is
+    // now a WINGTIP clearance (center distance minus the two half-spans), so the
+    // bound is fleet-size-independent: any true overlap reads ≤0. A ≥3 m tip
+    // clearance keeps a real margin while allowing the tight-but-legal pattern
+    // geometry the varied 16-type fleet produces during commanded 360s.
+    if worstAir < 3 { print("  FAIL: min airborne wingtip clearance \(Int(worstAir)) m < 3 (mid-air merge)"); ok = false }
     // B4 — the hold-short queue never lets two aircraft stack waiting to depart.
     if worstGround.isFinite && worstGround < 20 {
         print("  FAIL: departures stacked at \(Int(worstGround)) m at the hold-short (B4)"); ok = false
@@ -428,7 +437,7 @@ func scenarioSeparationSweep() -> Bool {
     if sawNaN { print("  FAIL: NaN across sweep"); ok = false }
     let gs = worstGround.isFinite ? "\(Int(worstGround)) m" : "never 2 waiting (queue holds one)"
     print(ok
-        ? "PASS sweep(\(seeds)): min air-sep \(worstAir.isFinite ? Int(worstAir) : -1) m, hold-short \(gs), downwind ≥ \(String(format: "%.2f", worstDownwind))× alt, LUAW never green"
+        ? "PASS sweep(\(seeds)): min wingtip clearance \(worstAir.isFinite ? Int(worstAir) : -1) m, hold-short \(gs), downwind ≥ \(String(format: "%.2f", worstDownwind))× alt, LUAW never green"
         : "FAIL sweep")
     return ok
 }

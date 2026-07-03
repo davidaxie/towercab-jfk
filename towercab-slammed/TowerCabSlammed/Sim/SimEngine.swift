@@ -121,10 +121,16 @@ public final class SimEngine {
             let hdg = prev.heading + angleDelta(from: prev.heading, to: cur.heading) * a
             let bank = prev.bank + (cur.bank - prev.bank) * a
             let pitch = prev.pitch + (cur.pitch - prev.pitch) * a
+            let crab = prev.crab + angleDelta(from: prev.crab, to: cur.crab) * a
+            let thr = prev.throttle + (cur.throttle - prev.throttle) * a
             let spd = prev.speed + (cur.speed - prev.speed) * a
+            // World velocity from the last tick — lets the presentation layer
+            // extrapolate past alpha=1 to kill the 10 Hz seam for fast movers.
+            let vel = (cur.position - prev.position) / Self.tickInterval
             return AircraftRenderState(id: cur.id, kind: cur.kind, livery: cur.livery,
                                        phase: cur.phase, position: pos, heading: hdg,
-                                       bank: bank, pitch: pitch, speed: spd,
+                                       bank: bank, pitch: pitch, crab: crab, throttle: thr,
+                                       speed: spd, velocity: vel,
                                        gearDown: cur.gearDown,
                                        landingLightsOn: cur.landingLightsOn, band: cur.band)
         }

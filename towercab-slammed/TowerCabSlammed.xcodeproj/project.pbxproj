@@ -21,6 +21,7 @@
 		63F0FBBBD859B31BF16FB552 /* AudioDirector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C33D50CAE8BF66ACCD45590 /* AudioDirector.swift */; };
 		6A958DA3446BBBED57B2547E /* HUDRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3F486B38ACEF2E9EDF139A5 /* HUDRoot.swift */; };
 		6F10DE207EE70BE331DCCEB5 /* ScoreScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93C856628D8CC691271D55AD /* ScoreScreen.swift */; };
+		7063C6EADDA69A7AE39DF650 /* AircraftCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2728167ADCF8E962FFEDE61F /* AircraftCatalog.swift */; };
 		74C9B8EB7E8B9E61E884B429 /* SkyLighting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 322C4E94A552F4A1E31AFADA /* SkyLighting.swift */; };
 		7B6E9E183046C733F4C55CB0 /* GameViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DC03FA5C1BCE3E36C161420 /* GameViewController.swift */; };
 		8444016B0071001588A39F37 /* Terrain.swift in Sources */ = {isa = PBXBuildFile; fileRef = D414B5B3FFBDAC56EE312726 /* Terrain.swift */; };
@@ -64,6 +65,7 @@
 		11A68F7F6D9E175C682C1D75 /* StripRail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StripRail.swift; sourceTree = "<group>"; };
 		1379756A581BBE4B98D6A520 /* WorldBuildStub.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldBuildStub.swift; sourceTree = "<group>"; };
 		2654AC1134C93B989C47305D /* WorldMaterials.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldMaterials.swift; sourceTree = "<group>"; };
+		2728167ADCF8E962FFEDE61F /* AircraftCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AircraftCatalog.swift; sourceTree = "<group>"; };
 		317DFA07A4F728C92315C698 /* StartScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartScreen.swift; sourceTree = "<group>"; };
 		322C4E94A552F4A1E31AFADA /* SkyLighting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkyLighting.swift; sourceTree = "<group>"; };
 		3236FD037704B1E15FF3FF07 /* UIStateBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIStateBridge.swift; sourceTree = "<group>"; };
@@ -111,6 +113,7 @@
 		2169CB6EECFBE4AB78A19F58 /* Sim */ = {
 			isa = PBXGroup;
 			children = (
+				2728167ADCF8E962FFEDE61F /* AircraftCatalog.swift */,
 				D72DF921ECD6B23B0FCBB246 /* Conflict.swift */,
 				0C993FCF197989CADE00CA24 /* KAVXAirport.swift */,
 				E808C9C12BA1A4F15734BE2A /* Radio.swift */,
@@ -301,6 +304,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				7063C6EADDA69A7AE39DF650 /* AircraftCatalog.swift in Sources */,
 				93C8F06E421382B3F87F9BA1 /* AircraftLiveries.swift in Sources */,
 				D70BE237EFFBBCB7A1AFC9E6 /* AircraftModelStub.swift in Sources */,
 				563304F0DD99FE5C12D524C3 /* AircraftModels.swift in Sources */,

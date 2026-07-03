@@ -82,6 +82,7 @@ enum WorldDetailsBuilder {
         root.addChildNode(signsNode(airport: airport, frame: frame))
         root.addChildNode(windsockNode(airport: airport, bank: bank))
         root.addChildNode(buildingsNode(airport: airport, frame: frame, bank: bank))
+        root.addChildNode(groundClutterNode(airport: airport, frame: frame))
         root.addChildNode(towerNode(airport: airport, bank: bank))
         root.addChildNode(apronFloodNode(airport: airport, frame: frame, bank: bank))
         root.addChildNode(bisonNode(airport: airport, frame: frame))
@@ -505,6 +506,81 @@ enum WorldDetailsBuilder {
         }
         place(terminal, s: 600, p: 163, facing: -frame.perp, padW: 26, padD: 18)
 
+        // --- Support cluster (A9): a handful of secondary structures so the
+        // ramp reads as a lived-in little airport village, not two boxes. All
+        // kept at p >= 178 (well clear of the ramp/taxi routes) along the back
+        // edge of the field on the tower/SE side.
+
+        // Two small maintenance/utility sheds NE of the hangar (reuse the gable
+        // builder at shed scale, alternating cream/sage skins).
+        let shedA = gabledHangar(width: 7.5, depth: 6, wallH: 3.0, ridgeH: 4.4,
+                                 wall: WorldMat.corrugatedSage, roof: WorldMat.corrugatedCream,
+                                 front: WorldMat.pbr(WorldTex.hangarFront(baseR: 0.62, baseG: 0.63, baseB: 0.53,
+                                                                          openDoor: false, seed: 0x51),
+                                                     roughness: 0.58, metalness: 0.2))
+        place(shedA, s: 432, p: 186, facing: -frame.perp, padW: 7.5, padD: 6)
+        let shedB = gabledHangar(width: 9, depth: 6.5, wallH: 3.2, ridgeH: 4.8,
+                                 wall: WorldMat.corrugatedCream, roof: WorldMat.corrugatedSage,
+                                 front: WorldMat.pbr(WorldTex.hangarFront(baseR: 0.83, baseG: 0.77, baseB: 0.66,
+                                                                          openDoor: true, seed: 0x52),
+                                                     roughness: 0.55, metalness: 0.2))
+        place(shedB, s: 505, p: 192, facing: -frame.perp, padW: 9, padD: 6.5)
+
+        // A low whitewashed ops / pilot-lounge box beside the terminal, one
+        // story with a shallow hip roof — matches the Spanish-Colonial palette.
+        let ops = SCNNode()
+        let opsW: CGFloat = 8, opsD: CGFloat = 6, opsH: CGFloat = 3.4
+        let opsBody = SCNNode(geometry: SCNBox(width: opsW, height: opsH, length: opsD, chamferRadius: 0))
+        opsBody.geometry?.materials = [WorldMat.stucco]
+        opsBody.position = SCNVector3(0, Float(opsH / 2), 0)
+        ops.addChildNode(opsBody)
+        let opsRoof = SCNNode(geometry: SCNPyramid(width: opsW + 1.2, height: 1.4, length: opsD + 1.2))
+        opsRoof.geometry?.materials = [WorldMat.roofTile]
+        opsRoof.position = SCNVector3(0, Float(opsH), 0)
+        ops.addChildNode(opsRoof)
+        // A couple of warm dusk windows on the ramp face (+Z after facing).
+        for dx in [-2.2, 0.6] {
+            let w = SCNNode(geometry: SCNPlane(width: 1.1, height: 1.4))
+            w.geometry?.materials = [windowMat]
+            w.position = SCNVector3(Float(dx), 1.9, Float(opsD / 2) + 0.05)
+            ops.addChildNode(w)
+        }
+        place(ops, s: 574, p: 186, facing: -frame.perp, padW: 8, padD: 6)
+
+        // Fuel farm: two light-tan tanks on a shared pad NE of the sheds.
+        let tankMat = WorldMat.pbr(worldColor(0.80, 0.76, 0.66), roughness: 0.45, metalness: 0.55)
+        let fuelFarm = SCNNode()
+        for dx in [-2.0, 2.0] {
+            let tank = SCNNode(geometry: SCNCylinder(radius: 1.6, height: 3.2))
+            tank.geometry?.materials = [tankMat]
+            tank.position = SCNVector3(Float(dx), 1.6, 0)
+            fuelFarm.addChildNode(tank)
+            // Domed cap.
+            let cap = SCNNode(geometry: SCNSphere(radius: 1.6))
+            cap.geometry?.materials = [tankMat]
+            cap.scale = SCNVector3(1, 0.35, 1)
+            cap.position = SCNVector3(Float(dx), 3.2, 0)
+            fuelFarm.addChildNode(cap)
+        }
+        place(fuelFarm, s: 470, p: 198, facing: -frame.perp, padW: 9, padD: 5)
+
+        // A small covered picnic ramada near the terminal front (4 posts + a
+        // flat tile roof) — the kind of shaded overlook Catalina's café has.
+        let ramada = SCNNode()
+        let ramW: CGFloat = 4.2, ramD: CGFloat = 3.2, postH: Float = 2.5
+        let ramPostMat = WorldMat.pbr(worldColor(0.42, 0.32, 0.22), roughness: 0.9)
+        for (sx, sz) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+            let post = SCNNode(geometry: SCNCylinder(radius: 0.09, height: CGFloat(postH)))
+            post.geometry?.materials = [ramPostMat]
+            post.position = SCNVector3(Float(Double(ramW / 2) * sx), postH / 2, Float(Double(ramD / 2) * sz))
+            ramada.addChildNode(post)
+        }
+        let ramRoof = SCNNode(geometry: SCNBox(width: ramW + 0.6, height: 0.22, length: ramD + 0.6, chamferRadius: 0.05))
+        ramRoof.geometry?.materials = [WorldMat.roofTile]
+        ramRoof.position = SCNVector3(0, postH + 0.11, 0)
+        ramada.addChildNode(ramRoof)
+        place(ramada, s: 616, p: 180, facing: -frame.perp, padW: 5, padD: 4, sink: 0.05)
+
         let flat = container.flattenedClone()
         flat.name = "buildings"
         return flat
@@ -587,6 +663,105 @@ enum WorldDetailsBuilder {
         let roofNode = SCNNode(geometry: roofMesh.build(material: roofMat))
         node.addChildNode(roofNode)
         return node
+    }
+
+    // MARK: - Ground clutter (a small visitor parking lot with a few cars +
+    // worn dirt footpaths threading the buildings and out to the rim overlooks
+    // — implies a world beyond the mesa without touching AirportGeometry).
+
+    private static func groundClutterNode(airport: AirportLayout, frame: FieldFrame) -> SCNNode {
+        let container = SCNNode()
+        container.name = "groundClutter"
+
+        // Gravel parking pad beside the terminal (SE of it, p ~186), riding the
+        // terrain like the building dirt pads.
+        let lotS0 = 588.0, lotSLen = 15.0, lotP0 = 178.0, lotPLen = 11.0
+        var padMesh = WorldMesh()
+        let up = SIMD3<Float>(0, 1, 0)
+        var grid: [[Int32]] = []
+        let cols = 4, rows = 3
+        for r in 0...rows {
+            var rowIdx: [Int32] = []
+            let p = lotP0 + lotPLen * Double(r) / Double(rows)
+            for c in 0...cols {
+                let s = lotS0 + lotSLen * Double(c) / Double(cols)
+                let world = frame.point(s: s, p: p)
+                let y = airport.groundHeight(at: world) + 0.05
+                rowIdx.append(padMesh.add(worldF3(world, y), up,
+                                          SIMD2(Float(Double(c) / Double(cols) * 3),
+                                                Float(Double(r) / Double(rows) * 2))))
+            }
+            grid.append(rowIdx)
+        }
+        for r in 0..<rows {
+            for c in 0..<cols {
+                padMesh.quad(grid[r][c], grid[r][c + 1], grid[r + 1][c + 1], grid[r + 1][c], desiredNormal: up)
+            }
+        }
+        let padMat = WorldMat.pbr(WorldTex.dirtPad(), roughness: 0.97, wrap: true)
+        container.addChildNode(SCNNode(geometry: padMesh.build(material: padMat)))
+
+        // A few parked cars — muted body colors, simple two-box silhouette.
+        let carPaints: [SCNMaterial] = [
+            WorldMat.pbr(worldColor(0.62, 0.20, 0.16), roughness: 0.4, metalness: 0.3),   // faded red
+            WorldMat.pbr(worldColor(0.20, 0.30, 0.42), roughness: 0.4, metalness: 0.3),   // dusty blue
+            WorldMat.pbr(worldColor(0.78, 0.76, 0.70), roughness: 0.45, metalness: 0.25), // cream white
+            WorldMat.pbr(worldColor(0.28, 0.30, 0.28), roughness: 0.45, metalness: 0.3),  // dark grey
+        ]
+        let glassMat = WorldMat.pbr(worldColor(0.10, 0.13, 0.16), roughness: 0.2, metalness: 0.5)
+        let tireMat = WorldMat.pbr(worldColor(0.08, 0.08, 0.09), roughness: 0.9)
+        var crng = WorldRand(seed: 0xCA75)
+        func car(s: Double, p: Double, yaw: Double, paint: SCNMaterial) {
+            let world = frame.point(s: s, p: p)
+            let y = airport.groundHeight(at: world)
+            let c = SCNNode()
+            c.position = worldV3(world, y)
+            c.eulerAngles.y = Float(yaw)
+            let bodyL = 4.2, bodyW = 1.75
+            let lower = SCNNode(geometry: SCNBox(width: CGFloat(bodyW), height: 0.75, length: CGFloat(bodyL), chamferRadius: 0.28))
+            lower.geometry?.materials = [paint]
+            lower.position = SCNVector3(0, 0.72, 0)
+            c.addChildNode(lower)
+            let cabin = SCNNode(geometry: SCNBox(width: CGFloat(bodyW * 0.92), height: 0.62, length: CGFloat(bodyL * 0.5), chamferRadius: 0.22))
+            cabin.geometry?.materials = [glassMat]
+            cabin.position = SCNVector3(0, 1.28, Float(bodyL * -0.03))
+            c.addChildNode(cabin)
+            for (dx, dz) in [(-1.0, 1.0), (1.0, 1.0), (-1.0, -1.0), (1.0, -1.0)] {
+                let wheel = SCNNode(geometry: SCNCylinder(radius: 0.32, height: 0.2))
+                wheel.geometry?.materials = [tireMat]
+                wheel.eulerAngles.z = .pi / 2
+                wheel.position = SCNVector3(Float(dx * bodyW / 2), 0.32, Float(dz * bodyL * 0.34))
+                c.addChildNode(wheel)
+            }
+            container.addChildNode(c)
+        }
+        // Three cars in the lot, slightly angled, one gap.
+        let lotYaw = Double(worldYawFacing(frame.perp))
+        car(s: 591, p: 182, yaw: lotYaw + crng.range(-0.1, 0.1), paint: carPaints[0])
+        car(s: 595, p: 182, yaw: lotYaw + crng.range(-0.1, 0.1), paint: carPaints[2])
+        car(s: 599, p: 182, yaw: lotYaw + crng.range(-0.1, 0.1), paint: carPaints[1])
+        // A pickup parked by the hangar apron.
+        car(s: 485, p: 182, yaw: lotYaw + 0.5, paint: carPaints[3])
+
+        // Worn dirt footpaths (thin dirt ribbons riding the terrain). They fan
+        // from the ramp/terminal toward the rim overlooks and link buildings.
+        let paths: [[(Double, Double)]] = [
+            [(600, 175), (615, 205), (632, 236), (648, 262)],   // terminal → SE overlook
+            [(600, 175), (470, 178)],                            // terminal → hangar apron
+            [(560, 175), (540, 210), (520, 250)],               // ramp → S rim
+            [(470, 178), (432, 190)],                            // hangar → sheds
+        ]
+        for wp in paths {
+            let pts = wp.map { frame.point(s: $0.0, p: $0.1) }
+            let geo = worldRibbonGeometry(points: pts, width: 1.5, lift: 0.035,
+                                          airport: airport, vPerMeter: 1.0 / 6.0,
+                                          material: WorldMat.dirt, step: 10)
+            container.addChildNode(SCNNode(geometry: geo))
+        }
+
+        let flat = container.flattenedClone()
+        flat.name = "groundClutter"
+        return flat
     }
 
     // MARK: - Tower (exterior shaft under the cab eye — derives from the layout)
@@ -887,19 +1062,168 @@ enum WorldDetailsBuilder {
             }
         }
 
-        // A few boulders near the rim.
-        for i in 0..<12 {
+        // --- Trees (the missing vertical vegetation): low-poly eucalyptus /
+        // pine canopies whose long shadows rake the turf at golden hour. A
+        // tapered trunk + 2-4 overlapping canopy lobes, warm-lit greens.
+        let barkMat = WorldMat.pbr(worldColor(0.34, 0.27, 0.20), roughness: 0.95)
+        // Tree-greens: slightly bluer/darker than the scrub so canopies read
+        // as trees, plus a dusty eucalyptus sage.
+        let treeTints: [SCNMaterial] = [
+            WorldMat.pbr(worldColor(0.30, 0.36, 0.24), roughness: 0.95),   // deep olive
+            WorldMat.pbr(worldColor(0.26, 0.33, 0.22), roughness: 0.95),   // pine green
+            WorldMat.pbr(worldColor(0.40, 0.44, 0.34), roughness: 0.95),   // dusty eucalyptus
+            WorldMat.pbr(worldColor(0.34, 0.40, 0.26), roughness: 0.95),   // mid sage-green
+        ]
+        func addTree(at p: V2, size: Double) {
+            let tree = SCNNode()
+            let trunkH = size
+            let trunkR = size * 0.032 + 0.06
+            let trunk = SCNNode(geometry: SCNCylinder(radius: CGFloat(trunkR), height: CGFloat(trunkH)))
+            trunk.geometry?.materials = [barkMat]
+            trunk.position = SCNVector3(0, Float(trunkH / 2), 0)
+            tree.addChildNode(trunk)
+            let canopyMat = treeTints[rng.int(treeTints.count)]
+            let lobes = 2 + rng.int(3)
+            let crownBase = trunkH * 0.62
+            for _ in 0..<lobes {
+                let lr = size * rng.range(0.28, 0.46)
+                let sph = SCNSphere(radius: CGFloat(lr))
+                sph.segmentCount = 6
+                sph.materials = [canopyMat]
+                let lobe = SCNNode(geometry: sph)
+                lobe.position = SCNVector3(Float(size * rng.range(-0.22, 0.22)),
+                                           Float(crownBase + size * rng.range(0.0, 0.5)),
+                                           Float(size * rng.range(-0.22, 0.22)))
+                lobe.scale = SCNVector3(1.0, Float(rng.range(0.85, 1.25)), 1.0)
+                tree.addChildNode(lobe)
+            }
+            let y = airport.groundHeight(at: p)
+            tree.position = worldV3(p, y - 0.15)     // roots just into the turf
+            tree.eulerAngles.y = Float(rng.range(0, .pi * 2))
+            container.addChildNode(tree)
+        }
+
+        // Scatter ~30 trees in 7 loose groves, biased toward the ESE half and
+        // near the buildings/road; windrow a couple along the service road.
+        var treesPlaced = 0
+        var groves = 0
+        var groveAttempts = 0
+        while groves < 7 && groveAttempts < 3000 && treesPlaced < 34 {
+            groveAttempts += 1
+            // Bias grove centers toward the SE half (p > centroid-ish) & inland.
+            let gp = V2(rng.range(minX, maxX), rng.range(minZ, maxZ))
+            let gst = frame.station(gp)
+            guard insidePolygon(gp), isClear(gst) else { continue }
+            // Prefer the ESE/inland half — skip most grove seeds on the far NW
+            // over-the-water side so trees frame the field, not the pattern.
+            if gst.y < 40 && rng.unit() > 0.35 { continue }
+            groves += 1
+            addTree(at: gp, size: rng.range(4.5, 7.0)); treesPlaced += 1
+            let kids = 2 + rng.int(4)
+            for _ in 0..<kids where treesPlaced < 34 {
+                let q = gp + V2(rng.range(-13, 13), rng.range(-13, 13))
+                guard insidePolygon(q), isClear(frame.station(q)) else { continue }
+                addTree(at: q, size: rng.range(3.5, 6.2)); treesPlaced += 1
+            }
+        }
+        // Eucalyptus windrow lining the service road (D19 corridor waypoints).
+        for i in 0..<(roadPts.count - 1) {
+            let a = V2(roadPts[i].0, roadPts[i].1), b = V2(roadPts[i + 1].0, roadPts[i + 1].1)
+            for t in stride(from: 0.0, to: 1.0, by: 0.5) {
+                let st = a + (b - a) * t + V2(0, 9)      // 9 m off the road, SE side
+                let w = frame.point(s: st.x, p: st.y)
+                guard insidePolygon(w), isClear(st) else { continue }
+                addTree(at: w, size: rng.range(4.0, 5.5)); treesPlaced += 1
+            }
+        }
+
+        // --- Wildflower / iceplant accents: tiny flat color patches near the
+        // rim overlooks, coastal magenta + gold, for painterly hue sparkle.
+        let flowerMats: [SCNMaterial] = [
+            { let m = WorldMat.pbr(worldColor(0.72, 0.28, 0.42), roughness: 0.9); m.emission.contents = worldColor(0.30, 0.06, 0.14); m.emission.intensity = 0.15; return m }(),
+            { let m = WorldMat.pbr(worldColor(0.86, 0.66, 0.22), roughness: 0.9); m.emission.contents = worldColor(0.30, 0.20, 0.04); m.emission.intensity = 0.15; return m }(),
+            WorldMat.pbr(worldColor(0.78, 0.42, 0.30), roughness: 0.9),
+        ]
+        var fAttempts = 0, fPlaced = 0
+        while fPlaced < 70 && fAttempts < 4000 {
+            fAttempts += 1
+            // Bias toward the rim (0.80-0.95 of the outline radius).
+            let idx = rng.int(outline.count)
+            let f = rng.range(0.78, 0.95)
+            let p = centroid + (outline[idx] - centroid) * f + V2(rng.range(-10, 10), rng.range(-10, 10))
+            guard insidePolygon(p), isClear(frame.station(p)) else { continue }
+            let patch = SCNNode()
+            let clumpCount = 2 + rng.int(4)
+            let mat = flowerMats[rng.int(flowerMats.count)]
+            for _ in 0..<clumpCount {
+                let s = rng.range(0.12, 0.28)
+                let sph = SCNSphere(radius: CGFloat(s))
+                sph.segmentCount = 4
+                sph.materials = [mat]
+                let dot = SCNNode(geometry: sph)
+                dot.position = SCNVector3(Float(rng.range(-0.4, 0.4)), Float(s * 0.5), Float(rng.range(-0.4, 0.4)))
+                patch.addChildNode(dot)
+            }
+            patch.position = worldV3(p, airport.groundHeight(at: p))
+            container.addChildNode(patch)
+            fPlaced += 1
+        }
+
+        // --- Rocks: faceted low-poly lumps (flat-shaded like the cliffs), with
+        // a couple of outcrop clusters ON the mesa top for geologic interest —
+        // not just dice on the rim.
+        let rockMat = WorldMat.pbr(worldColor(0.560, 0.492, 0.410), roughness: 0.92)
+        func addRock(at p: V2, size: Double, seed: UInt64) {
+            var rrng = WorldRand(seed: seed)
+            // Irregular lump: jitter a small ring of top/bottom vertices.
+            var mesh = WorldMesh()
+            let sides = 6
+            let h = size * rrng.range(0.6, 1.0)
+            var top: [SIMD3<Float>] = []
+            var bot: [SIMD3<Float>] = []
+            for k in 0..<sides {
+                let a = Double(k) / Double(sides) * 2 * .pi
+                let rTop = size * rrng.range(0.35, 0.6)
+                let rBot = size * rrng.range(0.7, 1.05)
+                top.append(SIMD3(Float(cos(a) * rTop), Float(h * rrng.range(0.75, 1.0)), Float(sin(a) * rTop)))
+                bot.append(SIMD3(Float(cos(a) * rBot), Float(rrng.range(-0.05, 0.1) * size), Float(sin(a) * rBot)))
+            }
+            let apex = SIMD3<Float>(Float(rrng.range(-0.15, 0.15) * size), Float(h), Float(rrng.range(-0.15, 0.15) * size))
+            let center = SIMD3<Float>(0, 0, 0)
+            for k in 0..<sides {
+                let j = (k + 1) % sides
+                let up = SIMD3<Float>(0, 1, 0)
+                mesh.facet(top[k], top[j], apex, hint: up, uv: .zero)               // crown
+                mesh.facet(bot[k], top[j], top[k], hint: up, uv: .zero)             // side upper
+                mesh.facet(bot[k], bot[j], top[j], hint: up, uv: .zero)             // side lower
+                mesh.facet(bot[k], center, bot[j], hint: SIMD3(0, -1, 0), uv: .zero) // base
+            }
+            let rock = SCNNode(geometry: mesh.build(material: rockMat))
+            rock.position = worldV3(p, airport.groundHeight(at: p) - size * 0.1)
+            rock.eulerAngles.y = Float(rrng.range(0, 6.2))
+            container.addChildNode(rock)
+        }
+        // Rim rocks.
+        for i in 0..<14 {
             let idx = (i * 17 + 5) % outline.count
             let p = centroid + (outline[idx] - centroid) * rng.range(0.82, 0.90)
             guard isClear(frame.station(p)) else { continue }
-            let size = rng.range(0.7, 1.8)
-            let rock = SCNNode(geometry: SCNBox(width: CGFloat(size * 1.4), height: CGFloat(size),
-                                                length: CGFloat(size * 1.1), chamferRadius: CGFloat(size * 0.3)))
-            rock.geometry?.materials = [WorldMat.boulder]
-            rock.position = worldV3(p, airport.groundHeight(at: p) + size * 0.28)
-            rock.eulerAngles = SCNVector3(Float(rng.range(-0.3, 0.3)), Float(rng.range(0, 6.2)), Float(rng.range(-0.3, 0.3)))
-            container.addChildNode(rock)
+            addRock(at: p, size: rng.range(0.9, 2.0), seed: 0x0C00 &+ UInt64(i))
         }
+        // A couple of outcrop clusters on the mesa top (station coords s,p —
+        // inland, off the pavement). Converted to world before placing.
+        let outcropStations: [V2] = [V2(700, 130), V2(760, 90), V2(220, -90), V2(120, 120)]
+        for (ci, st) in outcropStations.enumerated() {
+            guard isClear(st) else { continue }
+            let base = frame.point(s: st.x, p: st.y)      // world
+            let clusterN = 3 + rng.int(3)
+            for j in 0..<clusterN {
+                let q = base + V2(rng.range(-6, 6), rng.range(-6, 6))
+                guard insidePolygon(q), isClear(frame.station(q)) else { continue }
+                addRock(at: q, size: rng.range(0.7, 1.6), seed: 0x0D00 &+ UInt64(ci * 10 + j))
+            }
+        }
+
         let flat = container.flattenedClone()
         flat.name = "scrub"
         return flat

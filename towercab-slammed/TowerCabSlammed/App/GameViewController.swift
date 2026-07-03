@@ -140,6 +140,38 @@ final class GameViewController: UIViewController {
         if args.contains("-audiolog") { audioLog = true }
         if args.contains("-nobloom") { cameraRig.camera?.bloomIntensity = 0 }
         if args.contains("-autopilot") { autopilotEnabled = true }
+        // -follow <phaseKeyword> [KINDLABEL]: lock the camera onto the first
+        // aircraft whose strip phase matches (e.g. "rolling", "climbing",
+        // "landing", "final", "downwind"), optionally filtered by kind (CM60),
+        // and track it for close-up movement screenshots.
+        if let i = args.firstIndex(of: "-follow"), i + 1 < args.count {
+            debugFollowKeyword = args[i + 1].lowercased()
+            if i + 2 < args.count, !args[i + 2].hasPrefix("-") {
+                debugFollowKind = args[i + 2].uppercased()
+            }
+        }
+        // -turntable <KIND> [PHASE]: skip the shift; float one posed, slowly
+        // spinning aircraft in front of the cab to inspect the rig (surfaces,
+        // fans, gear, wheels, attitude) without fighting traffic timing.
+        if let i = args.firstIndex(of: "-turntable"), i + 1 < args.count {
+            let kl = args[i + 1].uppercased()
+            // Match a debug type keyword to a real AircraftKind (by display code
+            // or a legacy CM/VL/LK shorthand); default to the everyman C172.
+            turntableKind = AircraftKind.allCases.first { kl.contains($0.spec.display) }
+                ?? (kl.contains("CM") ? .challenger350
+                    : (kl.contains("VL") ? .sr22 : .c172))
+            if i + 2 < args.count, !args[i + 2].hasPrefix("-") {
+                turntablePhase = phaseFromKeyword(args[i + 2].lowercased())
+            }
+            let liv: Livery = turntableKind.engineIsJet ? .meridianVIP : .privateWhite
+            let e = CraftEntity(kind: turntableKind, livery: liv)
+            // Offset to the NE so the fixed centre mullion doesn't cross it.
+            turntablePos = V3(airport.towerCabEye.x + 26, airport.towerCabEye.y - 3,
+                              airport.towerCabEye.z - 34)
+            world.aircraftContainer.addChildNode(e.node)
+            turntableEntity = e
+            uiState.screen = .playing   // drop the start-screen overlay
+        }
         if args.contains("-autostart") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
                 guard let self = self else { return }
@@ -161,10 +193,31 @@ final class GameViewController: UIViewController {
     }
 
     private var debugPinnedHour: Double?
+    private var debugFollowKeyword: String?
+    private var debugFollowKind: String?
+    private var debugFollowID: AircraftID?
+    private var turntableEntity: AircraftEntity?
+    private var turntableKind: AircraftKind = .challenger350
+    private var turntablePhase: FlightPhase = .flare
+    private var turntablePos = V3(0, 0, 0)
+    private var turntableYaw = 0.0
     private var autopilotEnabled = false
     private var lastAutopilotAt: Double = -1
     private var audioLog = false
     private var audioLogFrame = 0
+
+    private func phaseFromKeyword(_ k: String) -> FlightPhase {
+        switch k {
+        case "flare", "landing":            return .flare
+        case "final", "short", "shortfinal": return .shortFinal
+        case "climb", "climbing":           return .climbingOut
+        case "roll", "rolling", "takeoff":  return .takeoffRoll
+        case "rollout":                     return .rollout
+        case "downwind":                    return .downwind
+        case "taxi":                        return .taxiToRunway
+        default:                            return .flare
+        }
+    }
 
     /// Demo/dev controller: issues sensible clearances through the same path
     /// as verb taps, so the whole loop (badges, streak, score) can run hands-off.
@@ -209,6 +262,25 @@ final class GameViewController: UIViewController {
         lastTimestamp = link.targetTimestamp
 
         cameraRig.update(dt: dt)
+
+        // Turntable inspection mode: pose + slowly spin one aircraft, no sim.
+        if let tt = turntableEntity {
+            turntableYaw += dt * 0.5
+            let liv: Livery = turntableKind.engineIsJet ? .meridianVIP : .privateWhite
+            let grounded = turntablePhase == .rollout || turntablePhase == .takeoffRoll
+                || turntablePhase == .taxiToRunway
+            let st = AircraftRenderState(
+                id: AircraftID(0), kind: turntableKind, livery: liv,
+                phase: turntablePhase, position: turntablePos, heading: turntableYaw,
+                bank: grounded ? 0 : 0.30,
+                pitch: turntablePhase == .flare ? 0.14 : (grounded ? 0.02 : 0.08),
+                crab: 0, throttle: 0.85, speed: grounded ? 30 : 60, velocity: .zero,
+                gearDown: turntablePhase != .climbingOut, landingLightsOn: false, band: .green)
+            tt.update(st, dt: dt)
+            cameraRig.frame(worldPoint: turntablePos,
+                            targetSpan: turntableKind.wingspanMeters * 1.5)
+            return
+        }
 
         guard let engine = engine else { return }
 
@@ -266,6 +338,20 @@ final class GameViewController: UIViewController {
         if !isPaused {
             world.sky.setTime(hourOfDay: debugPinnedHour
                 ?? (shiftStartHour + engine.simTime * timeScale / 3600.0))
+        }
+
+        // Debug: track an aircraft matching -follow for movement screenshots.
+        if let kw = debugFollowKeyword {
+            if debugFollowID == nil || !states.contains(where: { $0.id == debugFollowID }) {
+                debugFollowID = states.first(where: {
+                    $0.phase.stripLabel.lowercased().contains(kw) &&
+                    (debugFollowKind == nil || $0.kind.displayType == debugFollowKind)
+                })?.id
+            }
+            if let fid = debugFollowID, let fs = states.first(where: { $0.id == fid }) {
+                cameraRig.frame(worldPoint: fs.position,
+                                targetSpan: fs.kind.wingspanMeters * 2.6)
+            }
         }
 
         syncHUD(engine: engine, states: states)

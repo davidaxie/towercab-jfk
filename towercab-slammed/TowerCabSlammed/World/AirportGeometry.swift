@@ -47,6 +47,30 @@ enum WorldAirportBuilder {
             roughness: 0.62)
         material.diffuse.wrapS = .clamp
         material.diffuse.wrapT = .clamp
+        // Anisotropic filtering: the near runway fills the frame at a grazing
+        // angle from the cab, so joints/dashes smear without it.
+        material.diffuse.maxAnisotropy = 16
+        // Micro concrete detail: a tiling normal + roughness map so saw-cut
+        // joints and aggregate catch a faint highlight/micro-shadow at golden
+        // hour. UV runs u=0…1 across width, v=0…1 along length; tile at ~2 m so
+        // the maps read as ~11 tiles across × many along (kept square).
+        let acrossTiles = Float(rw.width / 2.0)
+        let alongTiles = Float(rw.length / 2.0)
+        if let nrm = WorldTex.concreteNormal() {
+            material.normal.contents = nrm
+            material.normal.wrapS = .repeat
+            material.normal.wrapT = .repeat
+            material.normal.contentsTransform = SCNMatrix4MakeScale(acrossTiles, alongTiles, 1)
+            material.normal.mipFilter = .linear
+            material.normal.maxAnisotropy = 16
+            material.normal.intensity = 0.35
+        }
+        material.roughness.contents = WorldTex.concreteRoughness()
+        material.roughness.wrapS = .repeat
+        material.roughness.wrapT = .repeat
+        material.roughness.contentsTransform = SCNMatrix4MakeScale(acrossTiles, alongTiles, 1)
+        material.roughness.mipFilter = .linear
+        material.roughness.maxAnisotropy = 16
         // Ribbon from threshold B (v=0) to A (v=1); u=0 on the +perp side,
         // matching the texture's numeral orientation.
         let geometry = worldRibbonGeometry(points: [rw.thresholdB, rw.thresholdA],
@@ -96,6 +120,13 @@ enum WorldAirportBuilder {
                     return pt
                 }
             }
+            // Black gloss-guard band under the centerline (spec taxiway line =
+            // 0.15 m yellow flanked by black; here a 0.75 m dark band reads as
+            // the contrast border against the grey asphalt from the cab).
+            let guardBand = worldRibbonGeometry(points: stripePts, width: 0.75,
+                                                lift: stripeLift - 0.005, airport: airport,
+                                                vPerMeter: 1.0, material: WorldMat.taxiGuardBlack)
+            container.addChildNode(SCNNode(geometry: guardBand))
             let stripe = worldRibbonGeometry(points: stripePts, width: 0.35,
                                              lift: stripeLift, airport: airport,
                                              vPerMeter: 1.0, material: WorldMat.stripeYellow)
