@@ -61,6 +61,14 @@ swiftc -O -o /tmp/simtest TowerCabSlammed/Sim/*.swift Tools/simharness.swift && 
 - `App/` + `Presentation/` — the loop: CADisplayLink at 60 fps drives sim
   advance → interpolated render states → entities → HUD sync; `CameraRig` owns
   the cab cam (inertial pan/zoom, 400 ms strip-snap framing).
+- `Audio/` — **procedural soundscape** (`AVAudioEngine`, no assets): a wind bed
+  that tracks the gust, per-aircraft engine voices (piston chop vs jet whine,
+  throttle by phase, manual doppler on flybys) spatialized through an
+  `AVAudioEnvironmentNode` whose listener follows the cab camera, and radio-
+  crackle / touchdown / badge / red-alarm cues on sim events. Programmer audio
+  to be replaced by the contracted audio designer per PRD §5 — but it proves the
+  "radio is the star" pillar and gives a tester something to hear. Respects the
+  mute switch (`.ambient`); the game is fully playable silent.
 
 ### Engine note (deviation from PRD §9.1, deliberate)
 
@@ -107,7 +115,35 @@ have landed and are verified — see the "Resolution status" section at the bott
 · `-autopilot` a demo controller plays the shift · `-openbloom` open the radial
 on the first airborne aircraft · `-hour <h>` pin the sky clock (e.g. `18.4`)
 · `-yaw/-pitch/-fov <v>` pose the camera · `-hide <name,…>` hide scene nodes
-· `-nobloom` disable camera bloom.
+· `-nobloom` disable camera bloom · `-seed <n>` fixed shift seed · `-campos x,y,z`
+relocate the camera · `-stats` SceneKit stats HUD · `-audiolog` log master-mix RMS.
+
+Real-touch playthrough tests live in `UITests/` (XCUITest through the actual gesture
+layer — start button, strip→bloom→verb, camera pan, score screen). Run with
+`xcodebuild ... test` (use a DerivedData path outside any cloud-synced folder).
+
+## Running on a real iPad + the put-down test
+
+The simulator can't validate frame rate, touch feel, or spatial audio on
+headphones — so those live on hardware. `scripts/run-on-device.sh <TEAM_ID>`
+builds with your Apple-ID signing team and installs to a connected iPad
+(a free personal team is enough for a 7-day build). Then run the PRD's
+**kill-gate** — the only test that ultimately matters for a vertical slice:
+
+- **Q8 / the put-down test (PRD §1.7):** hand the iPad to a fresh tester with no
+  instructions beyond "you're the tower — land and launch the planes." Don't
+  coach. The bar: **≥ 7 of 10 testers voluntarily start a second shift** with no
+  prompt. If the naked loop can't carry three minutes, the PRD says stop and fix
+  the loop before building anything downstream.
+- **Frame-rate floor (PRD §6.7):** on an A14-class iPad (e.g. iPad 10th gen),
+  confirm a locked 60 fps through the crescendo minute and a 30-minute thermal
+  soak (Xcode ▸ Product ▸ Profile ▸ Core Animation / Metal System Trace).
+- Play with **headphones** to hear the spatial engines and radio.
+
+What was verifiable in the simulator: the loop is fair and deterministic, the map
+is accurate, the frames pass the postcard test, and the audio engine generates
+sim-driven sound without dropouts. What only you can verify: is it *fun* in the
+hand, and does it hold 60 fps on the floor device.
 
 ## Known punch list (next session)
 
@@ -117,7 +153,9 @@ on the first airborne aircraft · `-hour <h>` pin the sky clock (e.g. `18.4`)
   straight overhead (fine from the cab). Ridge close-up detail could use more variation.
 - On-device gesture *feel* still wants a hands-on pass (touch is verified through the
   `UITests/` XCUITest gesture layer, not by finger).
-- Voice (PRD pillar 2), audio, weather set pieces, Duty Cards, career: next
+- Audio is programmer-synthesized (see `Audio/`); the PRD budgets a contract
+  audio designer + neural-TTS pilot voices to replace it.
+- Voice control (PRD pillar 2), weather set pieces, Duty Cards, career: next
   milestones, per slice scope below.
 
 ## Slice scope (what's deliberately missing)

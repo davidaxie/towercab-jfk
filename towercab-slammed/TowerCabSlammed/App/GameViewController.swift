@@ -21,6 +21,7 @@ final class GameViewController: UIViewController {
     private var engine: SimEngine?
     private var entities: [AircraftID: AircraftEntity] = [:]
     private let uiState = UIState()
+    private let audio = AudioDirector()
     private var lastTimestamp: CFTimeInterval = 0
 
     // C2: every shift gets a fresh seed; RESTART SAME SEED replays the last.
@@ -90,6 +91,8 @@ final class GameViewController: UIViewController {
 
         world.sky.setTime(hourOfDay: shiftStartHour)
 
+        audio.start()
+
         let link = CADisplayLink(target: self, selector: #selector(step(_:)))
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 60, preferred: 60)
         link.add(to: .main, forMode: .common)
@@ -134,6 +137,7 @@ final class GameViewController: UIViewController {
             }
         }
         if args.contains("-stats") { scnView.showsStatistics = true }
+        if args.contains("-audiolog") { audioLog = true }
         if args.contains("-nobloom") { cameraRig.camera?.bloomIntensity = 0 }
         if args.contains("-autopilot") { autopilotEnabled = true }
         if args.contains("-autostart") {
@@ -159,6 +163,8 @@ final class GameViewController: UIViewController {
     private var debugPinnedHour: Double?
     private var autopilotEnabled = false
     private var lastAutopilotAt: Double = -1
+    private var audioLog = false
+    private var audioLogFrame = 0
 
     /// Demo/dev controller: issues sensible clearances through the same path
     /// as verb taps, so the whole loop (badges, streak, score) can run hands-off.
@@ -232,6 +238,28 @@ final class GameViewController: UIViewController {
         for (id, entity) in entities where !live.contains(id) {
             entity.node.removeFromParentNode()
             entities.removeValue(forKey: id)
+            audio.removeEngine(id: id)
+        }
+
+        // Audio: listener tracks the cab camera; engines + wind track the sim.
+        let f = cameraRig.cameraNode.worldFront, u = cameraRig.cameraNode.worldUp
+        audio.updateListener(position: airport.towerCabEye,
+                             forward: V3(Double(f.x), Double(f.y), Double(f.z)),
+                             up: V3(Double(u.x), Double(u.y), Double(u.z)))
+        if !isPaused {
+            let w = engine.current.wind
+            audio.setWind(speedKts: w.speedKts, gustKts: w.gustKts, dt: dt)
+            for s in states {
+                audio.updateEngine(id: s.id, kind: s.kind, phase: s.phase,
+                                   position: s.position, speed: s.speed, dt: dt)
+            }
+        }
+        if audioLog {
+            audioLogFrame += 1
+            if audioLogFrame % 60 == 0 {
+                NSLog(String(format: "[audiolog] running=%@ rms=%.5f voices=%d",
+                             audio.running ? "Y" : "N", audio.meterRMS, states.count))
+            }
         }
 
         // Sky clock: sim time at 12x (unless pinned for screenshots).
@@ -351,10 +379,17 @@ final class GameViewController: UIViewController {
             }
             uiState.radioLog.append(RadioLine(speaker: speaker, text: call.text, isTower: isTower))
             if uiState.radioLog.count > 8 { uiState.radioLog.removeFirst() }
+            audio.playRadio(isTower: isTower)
+        case .movementCompleted(_, _, let isLanding):
+            if isLanding { audio.playTouchdown() }
+        case .bandChanged(_, let band):
+            if band == .red { audio.playAlarm() }
         case .badge(let award):
+            let isSave = award.badge == .save || award.badge == .lateSave
+            audio.playBadge(isSave: isSave)
             pushToast(BadgeToast(
                 text: "\(award.badge.label) +\(award.points)",
-                isSave: award.badge == .save || award.badge == .lateSave))
+                isSave: isSave))
         case .streakChanged(let m):
             uiState.streakMultiplier = m
         case .selfPreservation(_, let penalty):
@@ -461,6 +496,8 @@ final class GameViewController: UIViewController {
         lastSeed = seed
         entities.values.forEach { $0.node.removeFromParentNode() }
         entities.removeAll()
+        audio.removeAllEngines()
+        audio.setMuted(false)
         engine = SimEngine(airport: airport, seed: seed)
         isPaused = false
         uiState.paused = false
@@ -489,6 +526,7 @@ extension GameViewController: GameActions {
         guard engine != nil else { return }
         isPaused.toggle()
         uiState.paused = isPaused
+        audio.setMuted(isPaused)
     }
 
     func stripTapped(_ id: AircraftID) {

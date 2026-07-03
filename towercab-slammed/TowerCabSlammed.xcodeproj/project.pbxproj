@@ -18,6 +18,7 @@
 		563304F0DD99FE5C12D524C3 /* AircraftModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F329ABE4B31FF3932C83604 /* AircraftModels.swift */; };
 		5A89E285AF1DA9C36A2C74B9 /* CabInterior.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3E991CDFC2B95EA7D0709FC /* CabInterior.swift */; };
 		5C0657209A4CE0D40AD793D2 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0A61479796A25C5C8DF6732 /* AppDelegate.swift */; };
+		63F0FBBBD859B31BF16FB552 /* AudioDirector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C33D50CAE8BF66ACCD45590 /* AudioDirector.swift */; };
 		6A958DA3446BBBED57B2547E /* HUDRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3F486B38ACEF2E9EDF139A5 /* HUDRoot.swift */; };
 		6F10DE207EE70BE331DCCEB5 /* ScoreScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93C856628D8CC691271D55AD /* ScoreScreen.swift */; };
 		74C9B8EB7E8B9E61E884B429 /* SkyLighting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 322C4E94A552F4A1E31AFADA /* SkyLighting.swift */; };
@@ -78,6 +79,7 @@
 		84169733C843DACEF8ACEAAB /* AircraftLiveries.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AircraftLiveries.swift; sourceTree = "<group>"; };
 		8D69670C8C3C3504C1DD468C /* AircraftModelStub.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AircraftModelStub.swift; sourceTree = "<group>"; };
 		93C856628D8CC691271D55AD /* ScoreScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScoreScreen.swift; sourceTree = "<group>"; };
+		9C33D50CAE8BF66ACCD45590 /* AudioDirector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioDirector.swift; sourceTree = "<group>"; };
 		A0DF57506E4D8344E0590F2B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		AA028140316AAEBCCB32E42B /* SeededRNG.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeededRNG.swift; sourceTree = "<group>"; };
 		B3F486B38ACEF2E9EDF139A5 /* HUDRoot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HUDRoot.swift; sourceTree = "<group>"; };
@@ -98,6 +100,14 @@
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
+		1A7E14FC04E66E600E17DEA5 /* Audio */ = {
+			isa = PBXGroup;
+			children = (
+				9C33D50CAE8BF66ACCD45590 /* AudioDirector.swift */,
+			);
+			path = Audio;
+			sourceTree = "<group>";
+		};
 		2169CB6EECFBE4AB78A19F58 /* Sim */ = {
 			isa = PBXGroup;
 			children = (
@@ -147,6 +157,7 @@
 			children = (
 				A0DF57506E4D8344E0590F2B /* Info.plist */,
 				7E4EC1D2F1CE435D3D396A34 /* App */,
+				1A7E14FC04E66E600E17DEA5 /* Audio */,
 				7D9B31843B5C16BAF691730E /* Presentation */,
 				2169CB6EECFBE4AB78A19F58 /* Sim */,
 				AF2282D3E8CC206E8E797BE2 /* UI */,
@@ -296,6 +307,7 @@
 				C79C83D356DF8F7CEFCA7778 /* AircraftObserver.swift in Sources */,
 				05D6B0878AE40D7570A2262F /* AirportGeometry.swift in Sources */,
 				5C0657209A4CE0D40AD793D2 /* AppDelegate.swift in Sources */,
+				63F0FBBBD859B31BF16FB552 /* AudioDirector.swift in Sources */,
 				5A89E285AF1DA9C36A2C74B9 /* CabInterior.swift in Sources */,
 				E1791961E813C5E624FFD784 /* CameraRig.swift in Sources */,
 				F7F87A1C73AB6316B1FC9D02 /* Conflict.swift in Sources */,
