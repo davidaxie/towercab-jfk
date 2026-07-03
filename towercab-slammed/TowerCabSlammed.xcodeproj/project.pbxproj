@@ -9,12 +9,14 @@
 /* Begin PBXBuildFile section */
 		046352E86309DF3AF92C7C86 /* StartScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 317DFA07A4F728C92315C698 /* StartScreen.swift */; };
 		05D6B0878AE40D7570A2262F /* AirportGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72C3592F6A7A35069B0B53D5 /* AirportGeometry.swift */; };
+		099D180A9C26B98BFE235EE8 /* AircraftModels+RegionalJet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F444011F8BA491041D2E073A /* AircraftModels+RegionalJet.swift */; };
 		0B6A19A4A1CABE05385C3F26 /* SimTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A0B0D19C68298EBE596A3C /* SimTypes.swift */; };
 		18A44D8A2F739BF09A003827 /* RadialBloom.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BCE69057ED82A82E2CC30B8 /* RadialBloom.swift */; };
 		1CEA18B4E101A26258DA0A5F /* PlaythroughUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4794F6A2F65D9D617045DAC /* PlaythroughUITests.swift */; };
 		33DBE51EDF288359DF9BF82F /* Toasts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FC48E1D135429E1BB8B71F7 /* Toasts.swift */; };
 		41D8A08E95A4E0700C2FF18E /* SimEngine+Tick.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71A9CBD0472BB4CD48B619D6 /* SimEngine+Tick.swift */; };
 		4DA2C3F245B7084CE7A0BEF8 /* Scoring.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6494F2E812766DC86BC0F71 /* Scoring.swift */; };
+		4EF5C4C3E029BA7ACDA0EA50 /* AircraftModels+Turboprop.swift in Sources */ = {isa = PBXBuildFile; fileRef = E771F5A929238717F725C6AD /* AircraftModels+Turboprop.swift */; };
 		563304F0DD99FE5C12D524C3 /* AircraftModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F329ABE4B31FF3932C83604 /* AircraftModels.swift */; };
 		5A89E285AF1DA9C36A2C74B9 /* CabInterior.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3E991CDFC2B95EA7D0709FC /* CabInterior.swift */; };
 		5C0657209A4CE0D40AD793D2 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0A61479796A25C5C8DF6732 /* AppDelegate.swift */; };
@@ -24,7 +26,9 @@
 		7063C6EADDA69A7AE39DF650 /* AircraftCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2728167ADCF8E962FFEDE61F /* AircraftCatalog.swift */; };
 		74C9B8EB7E8B9E61E884B429 /* SkyLighting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 322C4E94A552F4A1E31AFADA /* SkyLighting.swift */; };
 		7B6E9E183046C733F4C55CB0 /* GameViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DC03FA5C1BCE3E36C161420 /* GameViewController.swift */; };
+		7DDA5D457EAE13382BD2F219 /* AircraftModels+Airliner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 278B0C99744924F175CC4205 /* AircraftModels+Airliner.swift */; };
 		8444016B0071001588A39F37 /* Terrain.swift in Sources */ = {isa = PBXBuildFile; fileRef = D414B5B3FFBDAC56EE312726 /* Terrain.swift */; };
+		888BA44577E48CF5853D7E53 /* AircraftModels+GA.swift in Sources */ = {isa = PBXBuildFile; fileRef = D85DA48CAB4EC0496B7A980D /* AircraftModels+GA.swift */; };
 		8B411CE3C548D23B8B40712A /* UIStateBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3236FD037704B1E15FF3FF07 /* UIStateBridge.swift */; };
 		8FC0A30449D793327E4FC7F4 /* KAVXAirport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C993FCF197989CADE00CA24 /* KAVXAirport.swift */; };
 		93C8F06E421382B3F87F9BA1 /* AircraftLiveries.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84169733C843DACEF8ACEAAB /* AircraftLiveries.swift */; };
@@ -66,6 +70,7 @@
 		1379756A581BBE4B98D6A520 /* WorldBuildStub.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldBuildStub.swift; sourceTree = "<group>"; };
 		2654AC1134C93B989C47305D /* WorldMaterials.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldMaterials.swift; sourceTree = "<group>"; };
 		2728167ADCF8E962FFEDE61F /* AircraftCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AircraftCatalog.swift; sourceTree = "<group>"; };
+		278B0C99744924F175CC4205 /* AircraftModels+Airliner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AircraftModels+Airliner.swift"; sourceTree = "<group>"; };
 		317DFA07A4F728C92315C698 /* StartScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartScreen.swift; sourceTree = "<group>"; };
 		322C4E94A552F4A1E31AFADA /* SkyLighting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkyLighting.swift; sourceTree = "<group>"; };
 		3236FD037704B1E15FF3FF07 /* UIStateBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIStateBridge.swift; sourceTree = "<group>"; };
@@ -92,11 +97,14 @@
 		D414B5B3FFBDAC56EE312726 /* Terrain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Terrain.swift; sourceTree = "<group>"; };
 		D6494F2E812766DC86BC0F71 /* Scoring.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Scoring.swift; sourceTree = "<group>"; };
 		D72DF921ECD6B23B0FCBB246 /* Conflict.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Conflict.swift; sourceTree = "<group>"; };
+		D85DA48CAB4EC0496B7A980D /* AircraftModels+GA.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AircraftModels+GA.swift"; sourceTree = "<group>"; };
 		E0A61479796A25C5C8DF6732 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		E3EABD7B9A350E766506FF53 /* SimEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimEngine.swift; sourceTree = "<group>"; };
+		E771F5A929238717F725C6AD /* AircraftModels+Turboprop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AircraftModels+Turboprop.swift"; sourceTree = "<group>"; };
 		E808C9C12BA1A4F15734BE2A /* Radio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Radio.swift; sourceTree = "<group>"; };
 		EA29ED48C4AD1DECC1C25F9B /* GroundDetails.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroundDetails.swift; sourceTree = "<group>"; };
 		EA516CA09EE2610C9DE27CB9 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		F444011F8BA491041D2E073A /* AircraftModels+RegionalJet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AircraftModels+RegionalJet.swift"; sourceTree = "<group>"; };
 		FA9695D471FB3249225936C1 /* AircraftObserver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AircraftObserver.swift; sourceTree = "<group>"; };
 		FDEC9A9FCB727E63E4E0E1CA /* CameraRig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraRig.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -133,6 +141,10 @@
 			children = (
 				84169733C843DACEF8ACEAAB /* AircraftLiveries.swift */,
 				6F329ABE4B31FF3932C83604 /* AircraftModels.swift */,
+				278B0C99744924F175CC4205 /* AircraftModels+Airliner.swift */,
+				D85DA48CAB4EC0496B7A980D /* AircraftModels+GA.swift */,
+				F444011F8BA491041D2E073A /* AircraftModels+RegionalJet.swift */,
+				E771F5A929238717F725C6AD /* AircraftModels+Turboprop.swift */,
 				8D69670C8C3C3504C1DD468C /* AircraftModelStub.swift */,
 				FA9695D471FB3249225936C1 /* AircraftObserver.swift */,
 				72C3592F6A7A35069B0B53D5 /* AirportGeometry.swift */,
@@ -307,6 +319,10 @@
 				7063C6EADDA69A7AE39DF650 /* AircraftCatalog.swift in Sources */,
 				93C8F06E421382B3F87F9BA1 /* AircraftLiveries.swift in Sources */,
 				D70BE237EFFBBCB7A1AFC9E6 /* AircraftModelStub.swift in Sources */,
+				7DDA5D457EAE13382BD2F219 /* AircraftModels+Airliner.swift in Sources */,
+				888BA44577E48CF5853D7E53 /* AircraftModels+GA.swift in Sources */,
+				099D180A9C26B98BFE235EE8 /* AircraftModels+RegionalJet.swift in Sources */,
+				4EF5C4C3E029BA7ACDA0EA50 /* AircraftModels+Turboprop.swift in Sources */,
 				563304F0DD99FE5C12D524C3 /* AircraftModels.swift in Sources */,
 				C79C83D356DF8F7CEFCA7778 /* AircraftObserver.swift in Sources */,
 				05D6B0878AE40D7570A2262F /* AirportGeometry.swift in Sources */,

@@ -1128,41 +1128,28 @@ final class CraftEntity: AircraftEntity {
 
     private static var instanceCounter = 0
 
-    /// PLACEHOLDER scale: uniformly resize a rigged build so a stand-in reads at
-    /// the real type's size. `ref` is the donor build's real wingspan (m); the
-    /// factor is target wingspan / ref. Applied to the body root, so the whole
-    /// rig (prop/gear/surfaces/lights/shadow) scales coherently.
-    private static func scale(_ body: SCNNode, _ kind: AircraftKind, ref: Double) {
-        let f = Float(kind.spec.wingspanM / ref)
-        body.scale = SCNVector3(f, f, f)
-    }
-
     init(kind: AircraftKind, livery: Livery) {
-        // Three rigged builds back the whole fleet. Reference wingspans for the
-        // placeholder scale: Lark=c172 11.0 m, Vela=sr22 11.7 m, Comet=cl35 21.0 m.
         switch kind {
-        // --- REAL (dedicated rigged build) ---
+        // GA singles + light twin
         case .c172:          parts = buildLark(livery: livery)
         case .sr22:          parts = buildVela(livery: livery)
+        case .c182:          parts = buildC182(livery: livery)
+        case .pa28:          parts = buildPA28(livery: livery)
+        case .baron58:       parts = buildBaron58(livery: livery)
+        // Turboprops + heritage
+        case .caravan:       parts = buildCaravan(livery: livery)
+        case .kingair350:    parts = buildKingAir350(livery: livery)
+        case .twinotter:     parts = buildTwinOtter(livery: livery)
+        case .dc3:           parts = buildDC3(livery: livery)
+        // Bizjets
+        case .phenom300:     parts = buildPhenom300(livery: livery)
         case .challenger350: parts = buildComet(livery: livery)
-
-        // --- PLACEHOLDER — real model pending ---
-        // High-wing singles / utility → Lark (scaled by wingspan / 11.0).
-        case .c182:      parts = buildLark(livery: livery); Self.scale(parts.body, kind, ref: 11.0)  // PLACEHOLDER — real model pending
-        case .caravan:   parts = buildLark(livery: livery); Self.scale(parts.body, kind, ref: 11.0)  // PLACEHOLDER — real model pending
-        case .twinotter: parts = buildLark(livery: livery); Self.scale(parts.body, kind, ref: 11.0)  // PLACEHOLDER — real model pending
-        // Low-wing / twins / tailwheel → Vela (scaled by wingspan / 11.7).
-        case .pa28:       parts = buildVela(livery: livery); Self.scale(parts.body, kind, ref: 11.7)  // PLACEHOLDER — real model pending
-        case .baron58:    parts = buildVela(livery: livery); Self.scale(parts.body, kind, ref: 11.7)  // PLACEHOLDER — real model pending
-        case .kingair350: parts = buildVela(livery: livery); Self.scale(parts.body, kind, ref: 11.7)  // PLACEHOLDER — real model pending
-        case .dc3:        parts = buildVela(livery: livery); Self.scale(parts.body, kind, ref: 11.7)  // PLACEHOLDER — real model pending
-        // All jets → Comet (scaled by wingspan / 21.0).
-        case .phenom300:  parts = buildComet(livery: livery); Self.scale(parts.body, kind, ref: 21.0) // PLACEHOLDER — real model pending
-        case .e175:       parts = buildComet(livery: livery); Self.scale(parts.body, kind, ref: 21.0) // PLACEHOLDER — real model pending
-        case .boeing737:  parts = buildComet(livery: livery); Self.scale(parts.body, kind, ref: 21.0) // PLACEHOLDER — real model pending
-        case .airbus320:  parts = buildComet(livery: livery); Self.scale(parts.body, kind, ref: 21.0) // PLACEHOLDER — real model pending
-        case .boeing777:  parts = buildComet(livery: livery); Self.scale(parts.body, kind, ref: 21.0) // PLACEHOLDER — real model pending
-        case .airbus380:  parts = buildComet(livery: livery); Self.scale(parts.body, kind, ref: 21.0) // PLACEHOLDER — real model pending
+        // Airliners (fictional carriers)
+        case .e175:          parts = buildE175(livery: livery)
+        case .boeing737:     parts = buildBoeing737(livery: livery)
+        case .airbus320:     parts = buildAirbus320(livery: livery)
+        case .boeing777:     parts = buildBoeing777(livery: livery)
+        case .airbus380:     parts = buildAirbus380(livery: livery)
         }
         node.addChildNode(parts.body)
         CraftEntity.instanceCounter += 1
