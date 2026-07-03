@@ -7,6 +7,10 @@ import Foundation
 
 struct Scoreboard {
     private(set) var score: Int = 0
+    /// B6 — every positive point banked, before penalties. Grades key off this
+    /// so penalties pressure the Precision axis instead of annihilating a run.
+    private(set) var positiveScore: Int = 0
+    private(set) var penaltyTotal: Int = 0
     private(set) var streakMultiplier: Int = 1
     private(set) var bestStreak: Int = 1
     private(set) var cleanRun: Int = 0            // consecutive clean movements
@@ -20,6 +24,7 @@ struct Scoreboard {
     var savesEarned = 0
     var saveOpportunities = 0
     var pilotForcedGoArounds = 0
+    var selfPreservations = 0
     var nags = 0
     var sustainedReds = 0
     var bestMomentPoints = 0
@@ -30,23 +35,27 @@ struct Scoreboard {
     mutating func award(base: Int) -> Int {
         let pts = base * streakMultiplier
         score += pts
+        positiveScore += pts
         return pts
     }
 
     /// Raw penalty (never multiplied).
     mutating func penalize(_ points: Int) {
         score -= points
+        penaltyTotal += points
     }
 
     /// Raw, unmultiplied credit (precautionary go-around, clean-shift bonus).
     mutating func awardRaw(_ points: Int) {
         score += points
+        positiveScore += points
     }
 
     @discardableResult
     mutating func awardBadge(_ badge: Badge, aircraft: AircraftID, basePoints: Int? = nil) -> BadgeAward {
         let pts = (basePoints ?? badge.points) * streakMultiplier
         score += pts
+        positiveScore += pts
         let a = BadgeAward(badge: badge, aircraft: aircraft, points: pts)
         badges.append(a)
         return a
@@ -103,15 +112,20 @@ struct Scoreboard {
 
     // MARK: Report
 
-    func makeReport(script: ShiftScript, averageDelay: Double) -> ShiftReport {
-        let par = max(1, script.parScore)
-        let flow = min(100, Int((Double(totalMovements) / Double(max(1, script.parMovements))) * 100))
-        let precision = totalMovements == 0 ? 100
+    /// B11 — pars come in from the engine, computed from traffic that actually
+    /// spawned (cap-abandoned orders never grade against the player).
+    func makeReport(parScore: Int, parMovements: Int, averageDelay: Double) -> ShiftReport {
+        let par = max(1, parScore)
+        let flow = min(100, Int((Double(totalMovements) / Double(max(1, parMovements))) * 100))
+        let cleanPct = totalMovements == 0 ? 100
             : Int((Double(cleanMovements) / Double(totalMovements)) * 100)
+        // B6 — penalties surface here, on the Precision axis.
+        let precision = max(0, min(100, cleanPct - 15 * selfPreservations - 5 * sustainedReds))
         let cool = saveOpportunities == 0 ? 70
             : min(100, Int((Double(savesEarned) / Double(saveOpportunities)) * 100))
         let frequency = max(0, 100 - 12 * pilotForcedGoArounds - 4 * nags)
-        let ratio = Double(score) / Double(par)
+        // B6 — grade from positive play; the −600s never nuke the letter.
+        let ratio = Double(positiveScore) / Double(par)
         let grade: ShiftGrade = ratio >= 1.35 ? .s : ratio >= 1.0 ? .a
             : ratio >= 0.7 ? .b : ratio >= 0.45 ? .c : .d
         return ShiftReport(totalScore: score, grade: grade, flow: flow,

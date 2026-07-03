@@ -30,12 +30,24 @@ enum Theme {
     static let spring = Animation.spring(response: 0.30, dampingFraction: 0.84)
     static let springFast = Animation.spring(response: 0.25, dampingFraction: 0.86)
 
+    // D31: green is reserved for cleared/complete states only — a normal strip
+    // reads warm paper, so the rail sits in the amber family until it earns green.
     static func toneColor(_ tone: StripTone) -> Color {
         switch tone {
-        case .normal: return sage
+        case .normal: return warmWhite
         case .attention: return amber
         case .alarm: return alarm
-        case .complete: return teal
+        case .complete: return sage
+        }
+    }
+
+    /// C11 — colorblind redundancy: every non-normal tone pairs its hue with a glyph.
+    static func toneGlyph(_ tone: StripTone) -> String? {
+        switch tone {
+        case .normal: return nil
+        case .attention: return "exclamationmark"
+        case .alarm: return "triangle.fill"
+        case .complete: return "checkmark"
         }
     }
 }

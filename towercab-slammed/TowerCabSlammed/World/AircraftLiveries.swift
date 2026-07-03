@@ -77,10 +77,28 @@ extension Livery {
     }
 }
 
+private extension UIColor {
+    /// D27: multiply RGB to deepen paint accents so they survive 400 m of haze.
+    func deepened(_ factor: CGFloat) -> UIColor {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        getRed(&r, green: &g, blue: &b, alpha: &a)
+        return UIColor(red: r * factor, green: g * factor, blue: b * factor, alpha: a)
+    }
+}
+
 // MARK: - Generated textures
 
 enum ArtTextures {
     private static var cache: [String: UIImage] = [:]
+
+    /// Standard 8-bit sRGB range — the default `.automatic` range produces
+    /// extended-range (16-bit) images on wide-gamut devices, whose Metal pixel
+    /// format SceneKit rejects at draw time (invalid-MTLPixelFormat abort).
+    static let stdFormat: UIGraphicsImageRendererFormat = {
+        let f = UIGraphicsImageRendererFormat()
+        f.preferredRange = .standard
+        return f
+    }()
 
     private static func image(_ key: String, _ make: () -> UIImage) -> UIImage {
         if let img = cache[key] { return img }
@@ -95,7 +113,7 @@ enum ArtTextures {
         image("fus-\(kind.rawValue)-\(livery.rawValue)") {
             let W: CGFloat = 512, H: CGFloat = 512
             let pal = livery.palette
-            return UIGraphicsImageRenderer(size: CGSize(width: W, height: H)).image { ctx in
+            return UIGraphicsImageRenderer(size: CGSize(width: W, height: H), format: ArtTextures.stdFormat).image { ctx in
                 let cg = ctx.cgContext
                 pal.body.setFill()
                 cg.fill(CGRect(x: 0, y: 0, width: W, height: H))
@@ -124,7 +142,7 @@ enum ArtTextures {
                     }
                 }
                 if pal.accentStripe {
-                    pal.accent.setStroke()
+                    pal.accent.deepened(0.85).setStroke()
                     for mirrored in [false, true] {
                         let p = UIBezierPath()
                         let xAt: (CGFloat) -> CGFloat = { w in mirrored ? W - (w * W + 9) : w * W + 9 }
@@ -137,10 +155,11 @@ enum ArtTextures {
 
                 if let cheat = pal.cheat {
                     let uCheat: CGFloat = kind == .comet60 ? 0.225 : 0.245
-                    cheat.setFill()
+                    // D27: doubled widths + deepened color so cheat lines carry at range.
+                    cheat.deepened(0.85).setFill()
                     for u in [uCheat, 1 - uCheat] {
-                        cg.fill(CGRect(x: W * u - 7, y: H * 0.05, width: 14, height: H * 0.93))
-                        cg.fill(CGRect(x: W * u + 12, y: H * 0.07, width: 3.5, height: H * 0.90))
+                        cg.fill(CGRect(x: W * u - 14, y: H * 0.05, width: 28, height: H * 0.93))
+                        cg.fill(CGRect(x: W * u + 19, y: H * 0.07, width: 7, height: H * 0.90))
                     }
                 }
 
@@ -183,7 +202,7 @@ enum ArtTextures {
     static func halo(key: String, color: UIColor) -> UIImage {
         image("halo-\(key)") {
             let s: CGFloat = 128
-            return UIGraphicsImageRenderer(size: CGSize(width: s, height: s)).image { ctx in
+            return UIGraphicsImageRenderer(size: CGSize(width: s, height: s), format: ArtTextures.stdFormat).image { ctx in
                 let cg = ctx.cgContext
                 let c = CGPoint(x: s / 2, y: s / 2)
                 let colors = [UIColor.white.withAlphaComponent(0.95).cgColor,
@@ -202,7 +221,7 @@ enum ArtTextures {
     static func propBlur() -> UIImage {
         image("propBlur") {
             let s: CGFloat = 256
-            return UIGraphicsImageRenderer(size: CGSize(width: s, height: s)).image { ctx in
+            return UIGraphicsImageRenderer(size: CGSize(width: s, height: s), format: ArtTextures.stdFormat).image { ctx in
                 let cg = ctx.cgContext
                 let c = CGPoint(x: s / 2, y: s / 2)
                 let gray = UIColor(white: 0.28, alpha: 1)
@@ -241,7 +260,7 @@ enum ArtTextures {
     static func softPuff() -> UIImage {
         image("softPuff") {
             let s: CGFloat = 128
-            return UIGraphicsImageRenderer(size: CGSize(width: s, height: s)).image { ctx in
+            return UIGraphicsImageRenderer(size: CGSize(width: s, height: s), format: ArtTextures.stdFormat).image { ctx in
                 let cg = ctx.cgContext
                 let c = CGPoint(x: s / 2, y: s / 2)
                 let colors = [UIColor(white: 1, alpha: 0.85).cgColor,
@@ -255,13 +274,174 @@ enum ArtTextures {
         }
     }
 
+    /// D24: soft radial contact-shadow blob planted under every aircraft.
+    static func contactShadow() -> UIImage {
+        image("contactShadow") {
+            let s: CGFloat = 128
+            return UIGraphicsImageRenderer(size: CGSize(width: s, height: s), format: ArtTextures.stdFormat).image { ctx in
+                let cg = ctx.cgContext
+                let c = CGPoint(x: s / 2, y: s / 2)
+                let colors = [UIColor.black.withAlphaComponent(1.0).cgColor,
+                              UIColor.black.withAlphaComponent(0.75).cgColor,
+                              UIColor.black.withAlphaComponent(0.28).cgColor,
+                              UIColor.black.withAlphaComponent(0).cgColor] as CFArray
+                let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                      colors: colors, locations: [0, 0.35, 0.7, 1])!
+                cg.drawRadialGradient(grad, startCenter: c, startRadius: 0,
+                                      endCenter: c, endRadius: s / 2, options: [])
+            }
+        }
+    }
+
     // MARK: Cab art
+
+    /// D29: console work surface, painted top-down (planar UVs on the desk ring).
+    /// Panel seams, screw dots, two taped chart rectangles, one coffee ring.
+    static func consoleTopSurface() -> UIImage {
+        image("consoleTop") {
+            let s: CGFloat = 512
+            let c = CGPoint(x: s / 2, y: s / 2)
+            let rOuter = s / 2                      // maps to console outer radius 2.25
+            let rInner = rOuter * 1.38 / 2.25
+            return UIGraphicsImageRenderer(size: CGSize(width: s, height: s), format: ArtTextures.stdFormat).image { ctx in
+                let cg = ctx.cgContext
+                UIColor(red: 0.10, green: 0.10, blue: 0.11, alpha: 1).setFill()
+                cg.fill(CGRect(x: 0, y: 0, width: s, height: s))
+                // Faint brushed variation.
+                for i in 0..<40 {
+                    let f = CGFloat(i)
+                    let a = f * 0.813
+                    UIColor(white: 0.5 + fmod(f * 0.37, 1) * 0.3,
+                            alpha: 0.015 + fmod(f * 0.53, 1) * 0.02).setStroke()
+                    let p = UIBezierPath(arcCenter: c,
+                                         radius: rInner + fmod(f * 0.61, 1) * (rOuter - rInner),
+                                         startAngle: a, endAngle: a + 0.8 + fmod(f * 0.29, 1),
+                                         clockwise: true)
+                    p.lineWidth = 1.5 + fmod(f * 0.43, 1) * 3
+                    p.stroke()
+                }
+                // Radial panel seams every 36° with screw dots flanking them.
+                let seam = UIColor(white: 0.02, alpha: 0.55)
+                let screwLit = UIColor(white: 0.45, alpha: 0.5)
+                let screwDark = UIColor(white: 0.0, alpha: 0.45)
+                for i in 0..<10 {
+                    let a = CGFloat(i) / 10 * 2 * .pi + 0.05
+                    let ca = cos(a), sa = sin(a)
+                    let p = UIBezierPath()
+                    p.move(to: CGPoint(x: c.x + ca * rInner, y: c.y + sa * rInner))
+                    p.addLine(to: CGPoint(x: c.x + ca * rOuter, y: c.y + sa * rOuter))
+                    p.lineWidth = 1.6
+                    seam.setStroke()
+                    p.stroke()
+                    for t in [0.25, 0.55, 0.85] as [CGFloat] {
+                        let r = rInner + t * (rOuter - rInner)
+                        for side in [-1.0, 1.0] as [CGFloat] {
+                            let sx = c.x + ca * r - sa * side * 7
+                            let sy = c.y + sa * r + ca * side * 7
+                            screwDark.setFill()
+                            cg.fillEllipse(in: CGRect(x: sx - 2.2, y: sy - 2.2, width: 4.4, height: 4.4))
+                            screwLit.setFill()
+                            cg.fillEllipse(in: CGRect(x: sx - 1.1, y: sy - 1.8, width: 2.0, height: 2.0))
+                        }
+                    }
+                }
+                // Circumferential seam mid-desk.
+                seam.setStroke()
+                let ring = UIBezierPath(arcCenter: c, radius: rInner + 0.55 * (rOuter - rInner),
+                                        startAngle: 0, endAngle: 2 * .pi, clockwise: true)
+                ring.lineWidth = 1.2
+                ring.stroke()
+                // Two taped chart rectangles (paper + tape corners).
+                func chart(at angle: CGFloat, rot: CGFloat, w: CGFloat, h: CGFloat) {
+                    let r = rInner + 0.5 * (rOuter - rInner)
+                    let p = CGPoint(x: c.x + cos(angle) * r, y: c.y + sin(angle) * r)
+                    cg.saveGState()
+                    cg.translateBy(x: p.x, y: p.y)
+                    cg.rotate(by: angle + .pi / 2 + rot)
+                    UIColor(red: 0.85, green: 0.83, blue: 0.76, alpha: 0.9).setFill()
+                    cg.fill(CGRect(x: -w / 2, y: -h / 2, width: w, height: h))
+                    UIColor(red: 0.35, green: 0.45, blue: 0.55, alpha: 0.5).setStroke()
+                    for i in 0..<4 {
+                        let line = UIBezierPath()
+                        line.move(to: CGPoint(x: -w / 2 + 5, y: -h / 2 + 8 + CGFloat(i) * 9))
+                        line.addLine(to: CGPoint(x: w / 2 - 5, y: -h / 2 + 8 + CGFloat(i) * 9))
+                        line.lineWidth = 1
+                        line.stroke()
+                    }
+                    UIColor(white: 0.75, alpha: 0.55).setFill()
+                    for (tx, ty) in [(-w / 2, -h / 2), (w / 2 - 12, h / 2 - 6)] {
+                        cg.fill(CGRect(x: tx - 2, y: ty - 2, width: 14, height: 8))
+                    }
+                    cg.restoreGState()
+                }
+                // Default view looks toward -Z (v < 0.5 → top of image after flip;
+                // decorative, so approximate placement is fine).
+                chart(at: -.pi / 2 - 0.45, rot: 0.12, w: 62, h: 46)
+                chart(at: -.pi / 2 + 0.62, rot: -0.2, w: 48, h: 40)
+                // Coffee ring stain near the mug bay.
+                let stainC = CGPoint(x: c.x + cos(-.pi / 2 - 0.9) * (rInner + 0.35 * (rOuter - rInner)),
+                                     y: c.y + sin(-.pi / 2 - 0.9) * (rInner + 0.35 * (rOuter - rInner)))
+                UIColor(red: 0.32, green: 0.20, blue: 0.10, alpha: 0.30).setStroke()
+                let stain = UIBezierPath(arcCenter: stainC, radius: 11,
+                                         startAngle: 0.4, endAngle: 2 * .pi + 0.1, clockwise: true)
+                stain.lineWidth = 3
+                stain.stroke()
+            }
+        }
+    }
+
+    /// A17: amber seven-segment-style wind + altimeter groups on a dark panel.
+    static func windAltReadout() -> UIImage {
+        image("windAlt") {
+            let W: CGFloat = 256, H: CGFloat = 84
+            return UIGraphicsImageRenderer(size: CGSize(width: W, height: H), format: ArtTextures.stdFormat).image { ctx in
+                let cg = ctx.cgContext
+                UIColor(white: 0.015, alpha: 1).setFill()
+                cg.fill(CGRect(x: 0, y: 0, width: W, height: H))
+                let amber = UIColor(red: 1.0, green: 0.62, blue: 0.14, alpha: 1)
+                let ghost = amber.withAlphaComponent(0.10)
+                let font = UIFont.monospacedDigitSystemFont(ofSize: 34, weight: .bold)
+                let small = UIFont.systemFont(ofSize: 11, weight: .semibold)
+                func draw(_ text: String, _ color: UIColor, _ f: UIFont, _ at: CGPoint) {
+                    (text as NSString).draw(at: at, withAttributes: [.font: f, .foregroundColor: color])
+                }
+                // Ghost segments behind the live digits — the unlit 7-seg glass.
+                draw("888 88", ghost, font, CGPoint(x: 14, y: 26))
+                draw("88.88", ghost, font, CGPoint(x: 150, y: 26))
+                draw("240 08", amber, font, CGPoint(x: 14, y: 26))
+                draw("29.92", amber, font, CGPoint(x: 150, y: 26))
+                draw("WIND °/KT", amber.withAlphaComponent(0.5), small, CGPoint(x: 16, y: 8))
+                draw("ALTIMETER", amber.withAlphaComponent(0.5), small, CGPoint(x: 152, y: 8))
+            }
+        }
+    }
+
+    /// D38: subtle kiln-glaze roughness variation for the mug, mean ≈ 0.32.
+    static func ceramicRoughness() -> UIImage {
+        image("ceramicRough") {
+            let s: CGFloat = 64
+            return UIGraphicsImageRenderer(size: CGSize(width: s, height: s), format: ArtTextures.stdFormat).image { ctx in
+                let cg = ctx.cgContext
+                UIColor(white: 0.32, alpha: 1).setFill()
+                cg.fill(CGRect(x: 0, y: 0, width: s, height: s))
+                for i in 0..<90 {
+                    let f = CGFloat(i)
+                    let x = fmod(f * 17.31, s)
+                    let y = fmod(f * 29.7, s)
+                    let r = 2.5 + fmod(f * 0.83, 1) * 5
+                    UIColor(white: 0.32 + (fmod(f * 0.57, 1) - 0.5) * 0.12,
+                            alpha: 0.35).setFill()
+                    cg.fillEllipse(in: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2))
+                }
+            }
+        }
+    }
 
     /// Very faint dusk gradient used as the cab-glass reflection map.
     static func duskReflection() -> UIImage {
         image("duskReflection") {
             let W: CGFloat = 128, H: CGFloat = 128
-            return UIGraphicsImageRenderer(size: CGSize(width: W, height: H)).image { ctx in
+            return UIGraphicsImageRenderer(size: CGSize(width: W, height: H), format: ArtTextures.stdFormat).image { ctx in
                 let cg = ctx.cgContext
                 let colors = [UIColor(red: 0.18, green: 0.26, blue: 0.48, alpha: 0.05).cgColor,
                               UIColor(red: 0.55, green: 0.38, blue: 0.42, alpha: 0.05).cgColor,
@@ -281,7 +461,7 @@ enum ArtTextures {
     static func scopeFace() -> UIImage {
         image("scopeFace") {
             let s: CGFloat = 256
-            return UIGraphicsImageRenderer(size: CGSize(width: s, height: s)).image { ctx in
+            return UIGraphicsImageRenderer(size: CGSize(width: s, height: s), format: ArtTextures.stdFormat).image { ctx in
                 let cg = ctx.cgContext
                 let c = CGPoint(x: s / 2, y: s / 2)
                 UIColor(red: 0.015, green: 0.07, blue: 0.06, alpha: 1).setFill()
@@ -323,7 +503,7 @@ enum ArtTextures {
     static func paperSheet() -> UIImage {
         image("paperSheet") {
             let W: CGFloat = 128, H: CGFloat = 168
-            return UIGraphicsImageRenderer(size: CGSize(width: W, height: H)).image { ctx in
+            return UIGraphicsImageRenderer(size: CGSize(width: W, height: H), format: ArtTextures.stdFormat).image { ctx in
                 let cg = ctx.cgContext
                 UIColor(red: 0.95, green: 0.94, blue: 0.90, alpha: 1).setFill()
                 cg.fill(CGRect(x: 0, y: 0, width: W, height: H))

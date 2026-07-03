@@ -1,16 +1,20 @@
 import SwiftUI
 
 // =============================================================================
-// StripRail — flight-progress strips down the right edge (rail law: ≤9 shown,
-// overflow collapses to a "+N MORE" chip). Strips must LEAVE satisfyingly:
-// completed strips slide off to the right on a ≥60 pt swipe (handoff).
+// StripRail — flight-progress strips down the right edge (rail law: ≤7 shown,
+// overflow collapses to a "+N MORE" chip; alarms are always promoted into
+// view). Strips must LEAVE satisfyingly: completed strips slide off to the
+// right on a ≥60 pt swipe (handoff).
 // =============================================================================
 
-private enum Rail {
-    static let stripWidth: CGFloat = 178
+enum Rail {
+    static let stripWidth: CGFloat = 224          // C13
     static let stripHeight: CGFloat = 68
-    static let maxVisible = 9
+    static let maxVisible = 7                     // C7
     static let handoffThreshold: CGFloat = 60
+    /// Horizontal footprint the rail claims from the right screen edge
+    /// (strip + trailing padding) — the bloom clamps against this (C19).
+    static let screenFootprint: CGFloat = stripWidth + 24
 }
 
 struct StripRailView: View {
@@ -18,8 +22,13 @@ struct StripRailView: View {
     let actions: GameActions?
 
     var body: some View {
-        let visible = Array(strips.prefix(Rail.maxVisible))
-        let overflow = strips.count - visible.count
+        // C7 — severity promotion within the cap: alarm → attention → normal
+        // → complete, stable order inside each class, so every alarm/attention
+        // strip is guaranteed a slot before stale completes hog one.
+        let ranked = [StripTone.alarm, .attention, .normal, .complete]
+            .flatMap { tone in strips.filter { $0.tone == tone } }
+        let visible = Array(ranked.prefix(Rail.maxVisible))
+        let overflow = ranked.count - visible.count
         VStack(spacing: 8) {
             ForEach(visible) { strip in
                 StripCard(strip: strip, actions: actions)
@@ -52,13 +61,7 @@ private struct StripCard: View {
 
     var body: some View {
         HStack(spacing: 9) {
-            // Tone band — the strip's traffic-light edge.
-            RoundedRectangle(cornerRadius: 2)
-                .fill(Theme.toneColor(strip.tone))
-                .frame(width: 4)
-                .pulsing(strip.tone == .alarm, dimTo: 0.35, period: 0.55)
-                .shadow(color: Theme.toneColor(strip.tone).opacity(strip.tone == .alarm ? 0.7 : 0.0),
-                        radius: 4)
+            toneBand
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -71,25 +74,28 @@ private struct StripCard: View {
                         .font(Theme.mono(15, .regular))
                         .foregroundStyle(Theme.warmWhite.opacity(0.55))
                 }
-                Text(strip.phaseLabel)
+                Text(shortPhase(strip.phaseLabel))
                     .font(Theme.display(15, .semibold))
-                    .tracking(1.3)
+                    .tracking(0.4)
                     .foregroundStyle(Theme.toneColor(strip.tone).opacity(0.95))
+                    .shadow(color: .black.opacity(0.55), radius: 1, y: 1)   // C25
                     .lineLimit(1)
-                    .minimumScaleFactor(0.85)
+                    .minimumScaleFactor(0.7)
                 if let urgency = strip.urgency {
                     urgencyBar(urgency)
                 }
             }
 
-            if let gap = strip.gapSeconds {
-                GapArc(seconds: gap, color: Theme.toneColor(strip.tone))
+            // C23 — the arc only appears once the margin is actually tight.
+            if let gap = strip.gapSeconds, gap <= 30 {
+                GapArc(seconds: min(gap, 99), color: Theme.toneColor(strip.tone))
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .frame(width: Rail.stripWidth, height: Rail.stripHeight)
         .etchedGlass(cornerRadius: 12,
+                     tintOpacity: 0.55,   // C25/D31 — darker plate for tone-text contrast
                      strokeTint: strip.isSelected ? Theme.warmWhite : .white)
         .overlay {
             // Delay ledger — the card slowly warms toward amber as it waits.
@@ -108,8 +114,39 @@ private struct StripCard: View {
         .offset(x: dragX)
         .opacity(1.0 - Double(dragX) / 420.0)
         .animation(Theme.springFast, value: strip.isSelected)
-        .gesture(handoffSwipe)
-        .gesture(taps)
+        // C22 — the drag recognizer only exists on complete strips; everywhere
+        // else the rail is a pure tap zone (no dead pan capture).
+        .gesture(handoffSwipe, including: strip.tone == .complete ? .all : .none)
+        .gesture(tap)
+        .accessibilityIdentifier("strip-\(strip.callsign)")
+    }
+
+    /// Tone band + C11 colorblind glyph under the bar.
+    private var toneBand: some View {
+        let tone = Theme.toneColor(strip.tone)
+        return VStack(spacing: 4) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(tone)
+                .frame(width: 4)
+                .frame(maxHeight: .infinity)
+                .pulsing(strip.tone == .alarm, dimTo: 0.35, period: 0.55)
+                .shadow(color: tone.opacity(strip.tone == .alarm ? 0.7 : 0.0), radius: 4)
+            if let glyph = Theme.toneGlyph(strip.tone) {
+                Image(systemName: glyph)
+                    .font(.system(size: 13, weight: .black))
+                    .foregroundStyle(tone)
+            }
+        }
+        .frame(width: 14)
+    }
+
+    /// C13 — strip-scale phraseology: long phases get their rail short form.
+    private func shortPhase(_ label: String) -> String {
+        switch label {
+        case "LINE UP & WAIT", "LINE UP AND WAIT": return "LINE UP"
+        case "HOLDING SHORT": return "HOLD SHORT"
+        default: return label
+        }
     }
 
     private func urgencyBar(_ urgency: Double) -> some View {
@@ -125,28 +162,24 @@ private struct StripCard: View {
         .frame(height: 3)
     }
 
-    private var taps: some Gesture {
-        TapGesture(count: 2)
-            .onEnded { actions?.stripDoubleTapped(strip.id) }
-            .exclusively(before: TapGesture()
-                .onEnded { actions?.stripTapped(strip.id) })
+    // C1 — single tap fires immediately (no double-tap disambiguation delay);
+    // re-tapping the selected strip frames the camera in the VC.
+    private var tap: some Gesture {
+        TapGesture().onEnded { actions?.stripTapped(strip.id) }
     }
 
     /// Rail hygiene: completed strips flick off to the right for handoff.
-    /// Attached to every card but inert unless the strip is .complete.
     private var handoffSwipe: some Gesture {
         DragGesture(minimumDistance: 10)
             .onChanged { value in
-                guard strip.tone == .complete else { return }
                 dragX = max(0, value.translation.width)
             }
             .onEnded { value in
-                guard strip.tone == .complete else { return }
                 if value.translation.width >= Rail.handoffThreshold {
                     actions?.verbSelected(strip.id, command: .handoff)
-                } else {
-                    withAnimation(Theme.springFast) { dragX = 0 }
                 }
+                // C21 — always spring home; the removal transition covers success.
+                withAnimation(Theme.springFast) { dragX = 0 }
             }
     }
 }

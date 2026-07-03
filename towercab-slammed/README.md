@@ -77,9 +77,29 @@ the native track ever becomes the product, migrate presentation to RealityKit.)
 
 ## Screenshots
 
-`Screenshots/` holds captures from the iPad Pro simulator (start screen, golden-hour
-sun, the radial bloom on a Comet 60 final, the SLAMMED crescendo with a full rail,
-dusk edge lights, the score screen).
+`Screenshots/` holds captures from the iPad Pro simulator. `00`–`06` are the first
+build; `07`–`11` are after the audit-fix pass (golden-hour cab, Comet on short final,
+the accurate top-down map, the dusk SLAMMED crescendo, the compact score screen).
+
+## Audit & fixes
+
+`AUDIT.md` is the full player-seat audit (~110 findings across real-world KAVX/aircraft
+accuracy, sim behavior, touch/HUD, and art) and the staged fix plan. All four stages
+have landed and are verified — see the "Resolution status" section at the bottom of
+`AUDIT.md`, including the one documented ground-routing limitation. Headlines:
+
+- **Sim fairness:** conflicts now warn ~40 s out across *all* committed arrivals (no
+  more zero-warning penalties); the self-preservation penalty is −600, once per
+  episode, and never nukes the grade; taxiing aircraft queue at the hold-short; the
+  strip phase ladder tells the truth (FINAL → SHORT FINAL → LANDING); random seed per
+  shift; SAVE-farming, force-end-while-flying, and cap-abandoned-par bugs closed.
+- **Map accuracy:** rebuilt against FAA/Conservancy data — 055/235° true, 914 m
+  concrete, SE parallel taxiway + dirt tiedown infield, single hangar, Spanish-Colonial
+  terminal, REIL/PVASI, the real 2.1 % hump, fBm island silhouette, cliff foam.
+- **Graphics:** cab-glass sky shafts gone, planted aircraft with contact shadows,
+  landing-light pearls on final, warm-and-lifted golden-hour/dusk grades.
+- **Build:** fixed a wide-gamut Metal pixel-format crash (procedural textures forced
+  to standard 8-bit range).
 
 ## Debug launch arguments (dev/screenshot harness)
 
@@ -91,13 +111,12 @@ on the first airborne aircraft · `-hour <h>` pin the sky clock (e.g. `18.4`)
 
 ## Known punch list (next session)
 
-- Runway numerals/markings need a legibility pass from cab distance; PAPI reads
-  small. Consider halo sprites for PAPI like the edge lights.
-- Faint view-locked sheen bands remain on two cab glass panes at some angles.
-- Score card vertical spacing when no badges were earned; badge chips unverified.
-- Ridge silhouettes NW read flat up close; add haze banding/variation.
-- Touch verified only via the code path (autopilot drives the same
-  `GameActions` route as taps); on-device gesture feel still needs a hands-on pass.
+- **Ground routing at the taxiway exit junction** — the top backlog item; see the
+  documented limitation in `AUDIT.md` (reservation-based ground planner).
+- Upper-sky gradient still reads a touch flat at midday; grass a little muddy from
+  straight overhead (fine from the cab). Ridge close-up detail could use more variation.
+- On-device gesture *feel* still wants a hands-on pass (touch is verified through the
+  `UITests/` XCUITest gesture layer, not by finger).
 - Voice (PRD pillar 2), audio, weather set pieces, Duty Cards, career: next
   milestones, per slice scope below.
 

@@ -42,35 +42,79 @@ struct ShiftScript {
         }
     }
 
-    static func standardShift(seed: UInt64) -> ShiftScript {
+    /// Coarse spawn-to-threshold estimate used by the authoring guard (B1).
+    /// Mirrors the sim's speed-bleed shape without simulating it.
+    static func estArrivalDuration(kind: AircraftKind, straightIn: Bool,
+                                   airport: AirportLayout) -> Double {
+        let vPat = kind.patternSpeed
+        let vRef = kind.approachSpeed
+        let vBleed = (vPat + vRef) / 2
+        if straightIn {
+            let d = airport.finalSpawnDistance
+            let bleed = min(d, 2000.0)
+            return (d - bleed) / vPat + bleed / vBleed
+        }
+        let downwind = airport.downwindEntryStation - airport.baseTurnStation
+        let baseLeg = airport.downwindOffset
+        let final = max(0, -airport.baseTurnStation)
+        return (downwind + baseLeg) / vPat + final / vBleed
+    }
+
+    static func standardShift(seed: UInt64, airport: AirportLayout = .kavx) -> ShiftScript {
         var rng = SeededRNG(seed: seed ^ 0x5C21F7_5C21F7)
         var script = ShiftScript()
         var t = rng.double(in: 4...8)
         var usedIsla = Set<Int>()
         var usedTail = Set<String>()
         var arrivalsMinusDepartures = 0
+        var lastArrivalSpawn = -1000.0
+        var lastArrivalLanding = -1000.0
+        var lastArrivalKind: AircraftKind? = nil
 
         while t < lastSpawnTime {
             // Mix ≈ 55/45, nudged so a run never goes all-one-direction.
             var pArrival = 0.55
             if arrivalsMinusDepartures >= 3 { pArrival = 0.30 }
             if arrivalsMinusDepartures <= -3 { pArrival = 0.75 }
-            let isArrival = rng.chance(pArrival)
+            var isArrival = rng.chance(pArrival)
             arrivalsMinusDepartures += isArrival ? 1 : -1
 
             let roll = rng.double(in: 0...1)
             let kind: AircraftKind = roll < 0.45 ? .lark72 : (roll < 0.80 ? .vela22 : .comet60)
+            let straightIn = rng.chance(0.5)
+
+            // B1/B13 — authoring guard. Consecutive arrivals keep ≥26 s spawn
+            // spacing (≥45 s when the follower type is faster — a Vela may
+            // never be authored to run down a Lark), and projected threshold
+            // crossings stay a landable ≥30 s apart. Violators flip to
+            // departures so the 12 s crescendo cadence survives as mixed flow.
+            if isArrival {
+                let fasterBehindSlower = lastArrivalKind.map {
+                    kind.approachSpeed > $0.approachSpeed + 0.1
+                } ?? false
+                let minGap = fasterBehindSlower ? 45.0 : 26.0
+                let landing = t + Self.estArrivalDuration(kind: kind, straightIn: straightIn,
+                                                          airport: airport)
+                if t - lastArrivalSpawn < minGap || landing - lastArrivalLanding < 30 {
+                    isArrival = false
+                    arrivalsMinusDepartures -= 2      // undo +1, apply −1
+                } else {
+                    lastArrivalSpawn = t
+                    lastArrivalLanding = landing
+                    lastArrivalKind = kind
+                }
+            }
 
             let (callsign, livery) = Self.makeIdentity(kind: kind, rng: &rng,
                                                        usedIsla: &usedIsla, usedTail: &usedTail)
             script.orders.append(SpawnOrder(
                 time: t,
                 isArrival: isArrival,
-                straightIn: rng.chance(0.5),
+                straightIn: straightIn,
                 kind: kind,
                 livery: livery,
                 callsign: callsign,
-                touchdownStation: rng.double(in: 252...318)))
+                touchdownStation: airport.runway.length * rng.double(in: 0.275...0.348)))
 
             t += Self.baseInterval(at: t) * rng.double(in: 0.85...1.18)
         }
@@ -111,10 +155,17 @@ struct ShiftScript {
                                      usedTail: inout Set<String>) -> (Callsign, Livery) {
         if kind == .comet60 {
             // VIP bizjet: N6xCM, "Comet Six-One-Charlie-Mike".
+            // B28 — bounded search (only 10 candidates exist), serial fallback.
             var tail = ""
+            var attempts = 0
             repeat {
                 tail = "N6\(Int(rng.double(in: 0...9.99)))CM"
-            } while usedTail.contains(tail)
+                attempts += 1
+            } while usedTail.contains(tail) && attempts < 12
+            if usedTail.contains(tail) {
+                var serial = 10
+                repeat { tail = "N\(600 + serial)CM"; serial += 1 } while usedTail.contains(tail)
+            }
             usedTail.insert(tail)
             let digits = String(tail.dropFirst().dropLast(2))
             return (Callsign(display: tail,
@@ -146,13 +197,19 @@ struct ShiftScript {
         // GA N-number: N7d4dLL — "Lark Seven-Three-Four-Romeo-Tango".
         let letters = "ABCDEFGHJKLMNPQRSTUVWXYZ"
         var tail = ""
+        var attempts = 0                                    // B28 — bounded
         repeat {
             let d1 = Int(rng.double(in: 0...9.99))
             let d2 = Int(rng.double(in: 0...9.99))
             let l1 = letters[letters.index(letters.startIndex, offsetBy: Int(rng.double(in: 0...23.99)))]
             let l2 = letters[letters.index(letters.startIndex, offsetBy: Int(rng.double(in: 0...23.99)))]
             tail = "N7\(d1)\(d2)\(l1)\(l2)"
-        } while usedTail.contains(tail)
+            attempts += 1
+        } while usedTail.contains(tail) && attempts < 40
+        if usedTail.contains(tail) {
+            var serial = 10
+            repeat { tail = "N7\(serial)XX"; serial += 1 } while usedTail.contains(tail)
+        }
         usedTail.insert(tail)
         let body = String(tail.dropFirst())
         let name = kind == .lark72 ? "Lark" : "Vela"

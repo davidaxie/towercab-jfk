@@ -22,6 +22,17 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.davidxie.towercab-slammed
         INFOPLIST_KEY_UILaunchScreen_Generation: true
+  TowerCabSlammedUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - UITests
+    dependencies:
+      - target: TowerCabSlammed
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.davidxie.towercab-slammed.uitests
+        TEST_TARGET_NAME: TowerCabSlammed
     info:
       path: TowerCabSlammed/Info.plist
       properties:

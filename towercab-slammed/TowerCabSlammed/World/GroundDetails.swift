@@ -4,10 +4,13 @@ import UIKit
 import simd
 
 // =============================================================================
-// Airfield details — PAPI, runway edge lights (the dusk switch-on beat),
-// windsock, hangars, the Spanish-style terminal, the fictional tower shaft,
-// scrub, and boulders. Emissive materials register with AirfieldLightBank;
-// the sky director drives their dusk ramp from sim time.
+// Airfield details — MIRL edge lights (the dusk switch-on beat), REIL strobes
+// at the 22 threshold, the PVASI left of the runway 4 approach (A6), windsock
+// with segmented circle (D23), runway-remaining + hold signs (A10), the one
+// hangar + Spanish Colonial terminal (A9), the fictional tower shaft, scrub
+// clusters (D15), boulders, and the two Catalina bison (A12). Emissive
+// materials register with AirfieldLightBank; the sky director drives their
+// dusk ramp from sim time.
 // =============================================================================
 
 /// Emissive materials / lights that switch on around dusk. Sky calls
@@ -29,7 +32,7 @@ final class AirfieldLightBank {
     private var materials: [MaterialEntry] = []
     private var lights: [LightEntry] = []
 
-    /// `onHour < 0` means always on at `dayIntensity` (PAPI), still brightening at dusk.
+    /// `onHour < 0` means always on at `dayIntensity` (PVASI), still brightening at dusk.
     func register(material: SCNMaterial, color: UIColor, onHour: Double,
                   ramp: Double = 0.0015, day: CGFloat = 0, night: CGFloat) {
         material.emission.contents = color
@@ -71,57 +74,143 @@ enum WorldDetailsBuilder {
 
     static func build(into root: SCNNode, airport: AirportLayout, bank: AirfieldLightBank) {
         let frame = FieldFrame(airport)
-        root.addChildNode(papiNode(airport: airport, frame: frame, bank: bank))
+        root.addChildNode(pvasiNode(airport: airport, frame: frame, bank: bank))
+        root.addChildNode(reilNode(airport: airport, frame: frame, bank: bank))
         for group in edgeLightNodes(airport: airport, frame: frame, bank: bank) {
             root.addChildNode(group)
         }
+        root.addChildNode(signsNode(airport: airport, frame: frame))
         root.addChildNode(windsockNode(airport: airport, bank: bank))
         root.addChildNode(buildingsNode(airport: airport, frame: frame, bank: bank))
         root.addChildNode(towerNode(airport: airport, bank: bank))
         root.addChildNode(apronFloodNode(airport: airport, frame: frame, bank: bank))
+        root.addChildNode(bisonNode(airport: airport, frame: frame))
         root.addChildNode(scrubNode(airport: airport, frame: frame))
     }
 
-    // MARK: - PAPI (left of the 22 threshold, on-glide two-white-two-red)
+    // MARK: - Shared lamp bits
 
-    private static func papiNode(airport: AirportLayout, frame: FieldFrame, bank: AirfieldLightBank) -> SCNNode {
-        let container = SCNNode()
-        // Pilot's left when landing 22 = -perp side.
-        let housing = WorldMat.pbr(worldColor(0.16, 0.18, 0.16), roughness: 0.6, metalness: 0.3)
-        let white = SCNMaterial()
-        white.lightingModel = .constant
-        white.diffuse.contents = UIColor.black
-        bank.register(material: white, color: worldColor(1.0, 0.98, 0.92), onHour: -1, day: 2.4, night: 5.0)
-        let red = SCNMaterial()
-        red.lightingModel = .constant
-        red.diffuse.contents = UIColor.black
-        bank.register(material: red, color: worldColor(1.0, 0.16, 0.10), onHour: -1, day: 2.4, night: 5.0)
-
-        // Faces the 22 approach (looking back up the glideslope, toward -dir).
-        let facingYaw = Float(-airport.runway.heading04)
-        for i in 0..<4 {
-            let st = frame.point(s: 150, p: -(airport.runway.width / 2 + 14 + Double(i) * 3.2))
-            let y = airport.groundHeight(at: st)
-            let box = SCNNode(geometry: SCNBox(width: 0.85, height: 0.5, length: 0.55, chamferRadius: 0.05))
-            box.geometry?.materials = [housing]
-            box.position = worldV3(st, y + 0.55)
-            box.eulerAngles.y = facingYaw
-            container.addChildNode(box)
-            let lens = SCNNode(geometry: SCNPlane(width: 0.55, height: 0.26))
-            lens.geometry?.materials = [i < 2 ? white : red]   // outer pair white, inner red
-            lens.position = SCNVector3(0, 0.04, 0.29)
-            box.addChildNode(lens)
-            let leg = SCNNode(geometry: SCNCylinder(radius: 0.05, height: 0.35))
-            leg.geometry?.materials = [housing]
-            leg.position = worldV3(st, y + 0.17)
-            container.addChildNode(leg)
+    /// Crossed additive glow quads — invisible while emission is 0 (additive
+    /// black), they carry the oversized-at-dusk read (D21).
+    private static func haloCross(size: CGFloat, material: SCNMaterial) -> SCNNode {
+        let node = SCNNode()
+        for yaw in [Float(0), .pi / 2] {
+            let plane = SCNPlane(width: size, height: size)
+            plane.materials = [material]
+            let q = SCNNode(geometry: plane)
+            q.eulerAngles.y = yaw
+            node.addChildNode(q)
         }
-        let flat = container.flattenedClone()
-        flat.name = "papi"
-        return flat
+        return node
     }
 
-    // MARK: - Runway edge + threshold lights (staggered dusk switch-on)
+    private static func haloMaterial(color: UIColor) -> SCNMaterial {
+        let m = SCNMaterial()
+        m.lightingModel = .constant
+        m.diffuse.contents = UIColor.black
+        m.emission.contents = color
+        m.emission.intensity = 0
+        m.blendMode = .add
+        m.writesToDepthBuffer = false
+        m.isDoubleSided = true
+        return m
+    }
+
+    // MARK: - PVASI (A6 — single pulsating unit LEFT of the runway 4 approach,
+    // i.e. the NW side near the SW end; replaces the fictional 22-side PAPI)
+
+    private static func pvasiNode(airport: AirportLayout, frame: FieldFrame,
+                                  bank: AirfieldLightBank) -> SCNNode {
+        let container = SCNNode()
+        container.name = "pvasi"
+        let st = frame.point(s: 790, p: -(airport.runway.width / 2 + 15))
+        let y = airport.groundHeight(at: st)
+        let housing = WorldMat.pbr(worldColor(0.16, 0.18, 0.16), roughness: 0.6, metalness: 0.3)
+
+        let box = SCNNode(geometry: SCNBox(width: 1.1, height: 0.7, length: 0.6, chamferRadius: 0.05))
+        box.geometry?.materials = [housing]
+        box.position = worldV3(st, y + 0.65)
+        box.eulerAngles.y = worldYawFacing(frame.dir)     // faces the 4 approach (SW)
+        container.addChildNode(box)
+        let leg = SCNNode(geometry: SCNCylinder(radius: 0.06, height: 0.4))
+        leg.geometry?.materials = [housing]
+        leg.position = worldV3(st, y + 0.2)
+        container.addChildNode(leg)
+
+        // On-glide white, always lit, boosted at dusk; the 2 s pulse rides on
+        // node opacity so the bank keeps owning emission intensity.
+        let lens = SCNMaterial()
+        lens.lightingModel = .constant
+        lens.diffuse.contents = UIColor.black
+        bank.register(material: lens, color: worldColor(1.0, 0.97, 0.90), onHour: -1, day: 2.6, night: 5.5)
+        let lensNode = SCNNode(geometry: SCNPlane(width: 0.7, height: 0.32))
+        lensNode.geometry?.materials = [lens]
+        lensNode.position = SCNVector3(0, 0.06, 0.31)
+        box.addChildNode(lensNode)
+
+        let halo = haloMaterial(color: worldColor(1.0, 0.95, 0.85))
+        bank.register(material: halo, color: worldColor(1.0, 0.95, 0.85), onHour: -1, day: 0.8, night: 3.0)
+        let glow = haloCross(size: 2.2, material: halo)
+        glow.position = worldV3(st, y + 0.7)
+        container.addChildNode(glow)
+
+        let pulse = SCNAction.repeatForever(.sequence([
+            .fadeOpacity(to: 0.35, duration: 1.0),
+            .fadeOpacity(to: 1.0, duration: 1.0),
+        ]))
+        pulse.timingMode = .easeInEaseOut
+        glow.runAction(pulse)
+        lensNode.runAction(pulse.copy() as! SCNAction)
+        return container
+    }
+
+    // MARK: - REIL (A6 — synchronized white strobes flanking the 22 threshold)
+
+    private static func reilNode(airport: AirportLayout, frame: FieldFrame,
+                                 bank: AirfieldLightBank) -> SCNNode {
+        let container = SCNNode()
+        container.name = "reil"
+        let housing = WorldMat.pbr(worldColor(0.18, 0.19, 0.18), roughness: 0.55, metalness: 0.3)
+        // 2 s cycle, double flash, both units on the same clock (synchronized).
+        let flash = SCNAction.repeatForever(.sequence([
+            .fadeOpacity(to: 1.0, duration: 0.04),
+            .fadeOpacity(to: 0.0, duration: 0.10),
+            .wait(duration: 0.10),
+            .fadeOpacity(to: 1.0, duration: 0.04),
+            .fadeOpacity(to: 0.0, duration: 0.10),
+            .wait(duration: 1.62),
+        ]))
+        for side in [-1.0, 1.0] {
+            let st = frame.point(s: 2, p: side * (airport.runway.width / 2 + 12))
+            let y = airport.groundHeight(at: st)
+            let box = SCNNode(geometry: SCNBox(width: 0.4, height: 0.35, length: 0.3, chamferRadius: 0.04))
+            box.geometry?.materials = [housing]
+            box.position = worldV3(st, y + 0.45)
+            box.eulerAngles.y = worldYawFacing(-frame.dir)   // faces the 22 approach (NE)
+            container.addChildNode(box)
+            let post = SCNNode(geometry: SCNCylinder(radius: 0.05, height: 0.35))
+            post.geometry?.materials = [housing]
+            post.position = worldV3(st, y + 0.17)
+            container.addChildNode(post)
+
+            let strobe = SCNMaterial()
+            strobe.lightingModel = .constant
+            strobe.diffuse.contents = UIColor.black
+            strobe.emission.contents = worldColor(1.0, 1.0, 0.98)
+            strobe.emission.intensity = 6.0
+            strobe.blendMode = .add
+            strobe.writesToDepthBuffer = false
+            strobe.isDoubleSided = true
+            let glow = haloCross(size: 2.6, material: strobe)
+            glow.position = worldV3(st, y + 0.55)
+            glow.opacity = 0
+            glow.runAction(flash.copy() as! SCNAction)
+            container.addChildNode(glow)
+        }
+        return container
+    }
+
+    // MARK: - MIRL edge + threshold lights (staggered dusk switch-on)
 
     private static func edgeLightNodes(airport: AirportLayout, frame: FieldFrame,
                                        bank: AirfieldLightBank) -> [SCNNode] {
@@ -131,36 +220,38 @@ enum WorldDetailsBuilder {
         let length = airport.runway.length
         let lateral = airport.runway.width / 2 + 2.5
 
-        func lamp(at st: V2, material: SCNMaterial, parent: SCNNode) {
+        func lamp(at st: V2, lens: SCNMaterial, halo: SCNMaterial, parent: SCNNode) {
             let world = frame.point(s: st.x, p: st.y)
             let y = airport.groundHeight(at: world)
             let post = SCNNode(geometry: SCNCylinder(radius: 0.05, height: 0.30))
             post.geometry?.materials = [stakeMat]
             post.position = worldV3(world, y + 0.15)
             parent.addChildNode(post)
-            // Oversized on purpose: a 15 cm lamp is sub-pixel from the cab.
-            // Diorama law — the light must READ at 500 m, not measure true.
-            let head = SCNNode(geometry: SCNSphere(radius: 0.42))
-            head.geometry?.materials = [material]
-            head.position = worldV3(world, y + 0.5)
+            // D21: true-scale warm-glass lens by day; the additive halo cross
+            // carries the oversized read once the bank ramps it at dusk.
+            let head = SCNNode(geometry: SCNSphere(radius: 0.22))
+            head.geometry?.materials = [lens]
+            head.position = worldV3(world, y + 0.42)
             parent.addChildNode(head)
+            let glow = haloCross(size: 1.7, material: halo)
+            glow.position = worldV3(world, y + 0.45)
+            parent.addChildNode(glow)
         }
 
         // Edge lights: warm white, in 6 groups marching from the 22 end.
         for g in 0..<groupCount {
             let container = SCNNode()
-            let mat = SCNMaterial()
-            mat.lightingModel = .constant
-            mat.diffuse.contents = worldColor(0.14, 0.12, 0.09)
-            bank.register(material: mat, color: worldColor(1.0, 0.85, 0.58),
-                          onHour: edgeLightsOnHour + Double(g) * edgeLightGroupStagger,
-                          night: 7.0)
+            let onHour = edgeLightsOnHour + Double(g) * edgeLightGroupStagger
+            let lens = WorldMat.pbr(worldColor(0.55, 0.50, 0.42), roughness: 0.3)
+            bank.register(material: lens, color: worldColor(1.0, 0.85, 0.58), onHour: onHour, night: 7.0)
+            let halo = haloMaterial(color: worldColor(1.0, 0.85, 0.58))
+            bank.register(material: halo, color: worldColor(1.0, 0.85, 0.58), onHour: onHour, night: 3.4)
             let s0 = length * Double(g) / Double(groupCount)
             let s1 = length * Double(g + 1) / Double(groupCount)
             var s = s0 + 14
             while s < s1 {
-                lamp(at: V2(s, lateral), material: mat, parent: container)
-                lamp(at: V2(s, -lateral), material: mat, parent: container)
+                lamp(at: V2(s, lateral), lens: lens, halo: halo, parent: container)
+                lamp(at: V2(s, -lateral), lens: lens, halo: halo, parent: container)
                 s += 55
             }
             let flat = container.flattenedClone()
@@ -169,14 +260,15 @@ enum WorldDetailsBuilder {
         }
         // Threshold bar at the 22 end: green, switches with group 0.
         let thresholdContainer = SCNNode()
-        let green = SCNMaterial()
-        green.lightingModel = .constant
-        green.diffuse.contents = worldColor(0.06, 0.10, 0.07)
-        bank.register(material: green, color: worldColor(0.15, 1.0, 0.35),
+        let greenLens = WorldMat.pbr(worldColor(0.30, 0.42, 0.32), roughness: 0.3)
+        bank.register(material: greenLens, color: worldColor(0.15, 1.0, 0.35),
                       onHour: edgeLightsOnHour, night: 4.5)
+        let greenHalo = haloMaterial(color: worldColor(0.2, 1.0, 0.4))
+        bank.register(material: greenHalo, color: worldColor(0.2, 1.0, 0.4),
+                      onHour: edgeLightsOnHour, night: 2.4)
         for k in 0..<6 {
             let p = -lateral + Double(k) / 5.0 * lateral * 2
-            lamp(at: V2(-4, p), material: green, parent: thresholdContainer)
+            lamp(at: V2(-4, p), lens: greenLens, halo: greenHalo, parent: thresholdContainer)
         }
         let flat = thresholdContainer.flattenedClone()
         flat.name = "thresholdLights"
@@ -184,7 +276,50 @@ enum WorldDetailsBuilder {
         return groups
     }
 
-    // MARK: - Windsock (wind 240/8 — points toward heading 060, gently working)
+    // MARK: - Signs (A10 — runway-remaining boards NW side; D-F21 hold sign)
+
+    private static func signsNode(airport: AirportLayout, frame: FieldFrame) -> SCNNode {
+        let container = SCNNode()
+        container.name = "signs"
+        let postMat = WorldMat.pbr(worldColor(0.45, 0.44, 0.42), roughness: 0.6, metalness: 0.4)
+
+        func board(texture: UIImage, w: CGFloat, h: CGFloat, at st: V2,
+                   topY: Double, facing: V2) {
+            let world = frame.point(s: st.x, p: st.y)
+            let ground = airport.groundHeight(at: world)
+            let post = SCNNode(geometry: SCNCylinder(radius: 0.05, height: CGFloat(topY)))
+            post.geometry?.materials = [postMat]
+            post.position = worldV3(world, ground + topY / 2)
+            container.addChildNode(post)
+            let mat = WorldMat.pbr(texture, roughness: 0.5)
+            mat.emission.contents = texture         // legible against dusk sky
+            mat.emission.intensity = 0.25
+            let plane = SCNPlane(width: w, height: h)
+            plane.materials = [mat]
+            let sign = SCNNode(geometry: plane)
+            sign.position = worldV3(world, ground + topY - Double(h) / 2)
+            sign.eulerAngles.y = worldYawFacing(facing)
+            container.addChildNode(sign)
+        }
+
+        // Distance remaining for landing 22 (rolls B → A): "2" at 2,000 ft
+        // remaining, "1" at 1,000 ft — both on the NW side.
+        let sideP = -(airport.runway.width / 2 + 11)
+        board(texture: WorldTex.remainingSign("2"), w: 1.3, h: 1.3,
+              at: V2(airport.runway.length - 609.6, sideP), topY: 2.2, facing: -frame.dir)
+        board(texture: WorldTex.remainingSign("1"), w: 1.3, h: 1.3,
+              at: V2(airport.runway.length - 304.8, sideP), topY: 2.2, facing: -frame.dir)
+        // Red/white runway hold sign beside the hold-short bar.
+        let holdSt = frame.station(airport.holdShortPoint)
+        board(texture: WorldTex.holdSign(), w: 1.3, h: 0.5,
+              at: V2(holdSt.x + 7, holdSt.y + 1.5), topY: 1.3, facing: frame.perp)
+
+        let flat = container.flattenedClone()
+        flat.name = "signs"
+        return flat
+    }
+
+    // MARK: - Windsock (D23 — SE by the ramp, segmented circle, plump & lit)
 
     private static func windsockNode(airport: AirportLayout, bank: AirfieldLightBank) -> SCNNode {
         let base = SCNNode()
@@ -197,6 +332,17 @@ enum WorldDetailsBuilder {
         pole.geometry?.materials = [poleMat]
         pole.position = SCNVector3(0, 2.5, 0)
         base.addChildNode(pole)
+
+        // Segmented circle — white marker boards ringing the sock (D23).
+        let segMat = WorldMat.pbr(worldColor(0.92, 0.91, 0.87), roughness: 0.6)
+        for i in 0..<10 {
+            let a = Double(i) / 10 * 2 * .pi
+            let seg = SCNNode(geometry: SCNBox(width: 2.6, height: 0.16, length: 0.7, chamferRadius: 0.03))
+            seg.geometry?.materials = [segMat]
+            seg.position = SCNVector3(Float(cos(a) * 9.0), 0.1, Float(sin(a) * 9.0))
+            seg.eulerAngles.y = Float(-a + .pi / 2)
+            base.addChildNode(seg)
+        }
 
         // Lit ring just under the sock — a dusk beacon for the sock itself.
         let ringMat = SCNMaterial()
@@ -223,8 +369,8 @@ enum WorldDetailsBuilder {
         sockMat.roughness.contents = 0.9
         sockMat.isDoubleSided = true
         // Read against a backlit dusk sky — the sock is wind info, never dark.
-        sockMat.emission.contents = UIColor(red: 0.42, green: 0.16, blue: 0.03, alpha: 1)
-        let cone = SCNCone(topRadius: 0.14, bottomRadius: 0.40, height: 3.0)
+        sockMat.emission.contents = UIColor(red: 0.55, green: 0.22, blue: 0.05, alpha: 1)
+        let cone = SCNCone(topRadius: 0.16, bottomRadius: 0.50, height: 3.0)   // D23 plump
         cone.materials = [sockMat]
         let sock = SCNNode(geometry: cone)
         sock.eulerAngles.x = -.pi / 2                        // cone +Y (tip) points along -Z
@@ -251,12 +397,11 @@ enum WorldDetailsBuilder {
         return base
     }
 
-    // MARK: - Buildings (hangars + Spanish terminal)
+    // MARK: - Buildings (A9 — ONE hangar + two-story Spanish Colonial terminal)
 
     private static func buildingsNode(airport: AirportLayout, frame: FieldFrame,
                                       bank: AirfieldLightBank) -> SCNNode {
         let container = SCNNode()
-        let yawAlign = Float(-airport.runway.heading22)
 
         // Shared warm window glow (dusk).
         let windowMat = SCNMaterial()
@@ -265,88 +410,100 @@ enum WorldDetailsBuilder {
         bank.register(material: windowMat, color: worldColor(1.0, 0.72, 0.38),
                       onHour: windowsOnHour, ramp: 0.006, night: 3.2)
 
-        func place(_ node: SCNNode, s: Double, p: Double, extraYaw: Float = 0, sink: Double = 0.25) {
+        // D22/F28: the dirt pad rotates with the building and wraps its
+        // footprint + 4 m; buildings sink slightly into it.
+        func place(_ node: SCNNode, s: Double, p: Double, facing: V2,
+                   padW: CGFloat, padD: CGFloat, sink: Double = 0.22) {
             let world = frame.point(s: s, p: p)
-            let y = airport.groundHeight(at: world) - sink
-            node.position = worldV3(world, y)
-            node.eulerAngles.y = yawAlign + extraYaw
-            container.addChildNode(node)
-            // Dirt pad footprint so structures don't sit straight on grass.
-            let pad = SCNNode(geometry: SCNPlane(width: 30, height: 26))
-            pad.geometry?.materials = [WorldMat.dirt]
+            let y = airport.groundHeight(at: world)
+            let wrapper = SCNNode()
+            wrapper.position = worldV3(world, y)
+            wrapper.eulerAngles.y = worldYawFacing(facing)
+            node.position.y -= Float(sink)
+            wrapper.addChildNode(node)
+            let pad = SCNNode(geometry: SCNPlane(width: padW + 4, height: padD + 4))
+            pad.geometry?.materials = [WorldMat.dirtPad]
             pad.eulerAngles.x = -.pi / 2
-            pad.position = worldV3(world, airport.groundHeight(at: world) + 0.04)
-            container.addChildNode(pad)
+            pad.position = SCNVector3(0, 0.04, 0)
+            wrapper.addChildNode(pad)
+            container.addChildNode(wrapper)
         }
 
-        // Hangar 1 — cream, big open dark doorway facing the apron (-p side).
-        let h1 = gabledHangar(width: 24, depth: 16, wallH: 4.6, ridgeH: 7.0,
-                              wall: WorldMat.corrugatedCream, roof: WorldMat.corrugatedSage,
-                              front: WorldMat.pbr(WorldTex.hangarFront(baseR: 0.83, baseG: 0.77, baseB: 0.66,
-                                                                       openDoor: true, seed: 0x91),
-                                                  roughness: 0.55, metalness: 0.2))
-        place(h1, s: 452, p: 188, extraYaw: .pi / 2)   // doorway faces the apron (-p)
+        // --- The hangar (relocated-Hamilton-Cove style): gable, cream
+        // corrugated, big open door facing the ramp; NE of the terminal along
+        // the ramp's back edge, ≥12 m clear of every taxi route (A9).
+        let hangar = gabledHangar(width: 20, depth: 14, wallH: 5.0, ridgeH: 7.6,
+                                  wall: WorldMat.corrugatedCream, roof: WorldMat.corrugatedSage,
+                                  front: WorldMat.pbr(WorldTex.hangarFront(baseR: 0.83, baseG: 0.77, baseB: 0.66,
+                                                                           openDoor: true, seed: 0x91),
+                                                      roughness: 0.55, metalness: 0.2))
+        place(hangar, s: 470, p: 170, facing: -frame.perp, padW: 20, padD: 14)
 
-        // Hangar 2 — sage, closed, slightly skewed.
-        let h2 = gabledHangar(width: 19, depth: 13, wallH: 4.0, ridgeH: 6.0,
-                              wall: WorldMat.corrugatedSage, roof: WorldMat.corrugatedCream,
-                              front: WorldMat.pbr(WorldTex.hangarFront(baseR: 0.62, baseG: 0.63, baseB: 0.53,
-                                                                       openDoor: false, seed: 0x92),
-                                                  roughness: 0.6, metalness: 0.2))
-        place(h2, s: 512, p: 191, extraYaw: .pi / 2 + 0.09)
-        // Hangar 2 side windows (warm at dusk).
-        for dx in [-4.0, 0.0, 4.0] {
-            let w = SCNNode(geometry: SCNPlane(width: 1.4, height: 0.9))
-            w.geometry?.materials = [windowMat]
-            w.position = SCNVector3(Float(dx), 2.6, Float(-13.0 / 2) - 0.05)
-            w.eulerAngles.y = .pi
-            h2.addChildNode(w)
-        }
-
-        // Spanish-style terminal — white stucco, red tile hip roof, arcade.
+        // --- Terminal: two-story Spanish Colonial (A9) — whitewashed stucco
+        // masses, red clay tile, arcade facing the ramp, squat tower one floor
+        // higher with a pyramidal cap, blue-and-gold tile accents.
         let terminal = SCNNode()
-        let bodyW: CGFloat = 17, bodyD: CGFloat = 10, bodyH: CGFloat = 4.2
+        let bodyW: CGFloat = 18, bodyD: CGFloat = 10, bodyH: CGFloat = 7.2
         let body = SCNNode(geometry: SCNBox(width: bodyW, height: bodyH, length: bodyD, chamferRadius: 0))
         let frontMat = WorldMat.pbr(WorldTex.terminalFront(), roughness: 0.9)
-        // SCNBox materials: +Z, +X, -Z, -X, +Y, -Y. Front (+Z) faces the apron.
+        // SCNBox materials: +Z, +X, -Z, -X, +Y, -Y. Front (+Z) faces the ramp.
         body.geometry?.materials = [frontMat, WorldMat.stucco, WorldMat.stucco,
                                     WorldMat.stucco, WorldMat.stucco, WorldMat.stucco]
         body.position = SCNVector3(0, Float(bodyH / 2), 0)
         terminal.addChildNode(body)
-        let roof = SCNNode(geometry: SCNPyramid(width: bodyW + 2.2, height: 2.6, length: bodyD + 2.2))
+        // Hip roof over the main block.
+        let roof = SCNNode(geometry: SCNPyramid(width: bodyW + 2.0, height: 2.4, length: bodyD + 2.0))
         roof.geometry?.materials = [WorldMat.roofTile]
         roof.position = SCNVector3(0, Float(bodyH), 0)
         terminal.addChildNode(roof)
-        // Porch: tile slab on four posts along the front.
-        let porch = SCNNode(geometry: SCNBox(width: bodyW - 3, height: 0.25, length: 2.6, chamferRadius: 0))
+        // Arcade colonnade along the ramp face: tile pent roof on 5 piers.
+        let porch = SCNNode(geometry: SCNBox(width: bodyW - 2, height: 0.28, length: 3.2, chamferRadius: 0))
         porch.geometry?.materials = [WorldMat.roofTile]
-        porch.position = SCNVector3(0, 3.0, Float(bodyD / 2) + 1.3)
+        porch.position = SCNVector3(0, 3.6, Float(bodyD / 2) + 1.7)
         terminal.addChildNode(porch)
-        for i in 0..<4 {
-            let post = SCNNode(geometry: SCNBox(width: 0.28, height: 3.0, length: 0.28, chamferRadius: 0.02))
-            post.geometry?.materials = [WorldMat.stucco]
-            let x = Float(-(bodyW - 4) / 2) + Float(i) * Float((bodyW - 4) / 3)
-            post.position = SCNVector3(x, 1.5, Float(bodyD / 2) + 2.2)
-            terminal.addChildNode(post)
+        for i in 0..<5 {
+            let pier = SCNNode(geometry: SCNBox(width: 0.42, height: 3.6, length: 0.42, chamferRadius: 0.03))
+            pier.geometry?.materials = [WorldMat.stucco]
+            let x = Float(-(bodyW - 3.4) / 2) + Float(i) * Float((bodyW - 3.4) / 4)
+            pier.position = SCNVector3(x, 1.8, Float(bodyD / 2) + 3.0)
+            terminal.addChildNode(pier)
         }
-        // Cupola.
-        let cup = SCNNode(geometry: SCNBox(width: 1.6, height: 1.4, length: 1.6, chamferRadius: 0))
-        cup.geometry?.materials = [WorldMat.stucco]
-        cup.position = SCNVector3(0, Float(bodyH) + 2.6, 0)
-        terminal.addChildNode(cup)
-        let cupRoof = SCNNode(geometry: SCNPyramid(width: 2.0, height: 0.9, length: 2.0))
-        cupRoof.geometry?.materials = [WorldMat.roofTile]
-        cupRoof.position = SCNVector3(0, Float(bodyH) + 3.3, 0)
-        terminal.addChildNode(cupRoof)
-        // Terminal windows glow through the arches at dusk.
-        for dx in [-4.2, 0.0, 4.2] {
-            let w = SCNNode(geometry: SCNPlane(width: 1.5, height: 1.9))
+        // Squat tower — one floor higher, pyramidal red-tile cap.
+        let towerW: CGFloat = 5.2, towerH: CGFloat = 10.2
+        let squat = SCNNode(geometry: SCNBox(width: towerW, height: towerH, length: towerW, chamferRadius: 0))
+        squat.geometry?.materials = [WorldMat.stucco]
+        squat.position = SCNVector3(Float(bodyW / 2 - towerW / 2 + 0.6), Float(towerH / 2), 0)
+        terminal.addChildNode(squat)
+        let cap = SCNNode(geometry: SCNPyramid(width: towerW + 1.2, height: 2.6, length: towerW + 1.2))
+        cap.geometry?.materials = [WorldMat.roofTile]
+        cap.position = SCNVector3(Float(bodyW / 2 - towerW / 2 + 0.6), Float(towerH), 0)
+        terminal.addChildNode(cap)
+        // Blue-and-gold tile band around the squat tower (A9 accents).
+        let bandMat = WorldMat.pbr(WorldTex.tileBand(), roughness: 0.6, wrap: true)
+        let band = SCNNode(geometry: SCNBox(width: towerW + 0.12, height: 0.5, length: towerW + 0.12,
+                                            chamferRadius: 0))
+        band.geometry?.materials = [bandMat]
+        band.position = SCNVector3(Float(bodyW / 2 - towerW / 2 + 0.6), Float(towerH) - 1.5, 0)
+        terminal.addChildNode(band)
+        // Warm windows: upper floor over the arcade + one lit tower window.
+        for dx in [-6.3, -3.6, -0.9, 1.8] {
+            let w = SCNNode(geometry: SCNPlane(width: 1.2, height: 1.9))
             w.geometry?.materials = [windowMat]
-            w.position = SCNVector3(Float(dx), 1.5, Float(bodyD / 2) + 0.06)
+            w.position = SCNVector3(Float(dx), 5.3, Float(bodyD / 2) + 0.06)
             terminal.addChildNode(w)
         }
-        // Terminal front (+Z local) faces NE toward the apron with extraYaw 0.
-        place(terminal, s: 604, p: 122, extraYaw: 0)
+        let tw = SCNNode(geometry: SCNPlane(width: 1.0, height: 1.4))
+        tw.geometry?.materials = [windowMat]
+        tw.position = SCNVector3(Float(bodyW / 2 - towerW / 2 + 0.6), 7.6, Float(towerW / 2) + 0.06)
+        terminal.addChildNode(tw)
+        // Ground-floor arcade glow, seen through the arches at dusk.
+        for dx in [-3.4, 0.0, 3.4] {
+            let w = SCNNode(geometry: SCNPlane(width: 1.6, height: 1.7))
+            w.geometry?.materials = [windowMat]
+            w.position = SCNVector3(Float(dx), 1.3, Float(bodyD / 2) + 0.06)
+            terminal.addChildNode(w)
+        }
+        place(terminal, s: 600, p: 163, facing: -frame.perp, padW: 26, padD: 18)
 
         let flat = container.flattenedClone()
         flat.name = "buildings"
@@ -359,7 +516,7 @@ enum WorldDetailsBuilder {
         let w = Float(width), d = Float(depth), h = Float(wallH), r = Float(ridgeH)
 
         var walls = WorldMesh()
-        // Side walls (±X), back wall (+Z rear).
+        // Side walls (±X), back wall (-Z rear; +Z front carries the doorway).
         func wallQuad(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ c: SIMD3<Float>, _ dd: SIMD3<Float>,
                       normal: SIMD3<Float>, uScale: Float) {
             let ia = walls.add(a, normal, SIMD2(0, 1))
@@ -373,14 +530,14 @@ enum WorldDetailsBuilder {
                  normal: SIMD3(-1, 0, 0), uScale: uSide)
         wallQuad(SIMD3(w/2, 0, d/2), SIMD3(w/2, 0, -d/2), SIMD3(w/2, h, -d/2), SIMD3(w/2, h, d/2),
                  normal: SIMD3(1, 0, 0), uScale: uSide)
-        // Back gable (+Z): wall + triangle to ridge.
-        wallQuad(SIMD3(w/2, 0, d/2), SIMD3(-w/2, 0, d/2), SIMD3(-w/2, h, d/2), SIMD3(w/2, h, d/2),
-                 normal: SIMD3(0, 0, 1), uScale: uBack)
-        let bg0 = walls.add(SIMD3(-w/2, h, d/2), SIMD3(0, 0, 1), SIMD2(0, 0))
-        let bg1 = walls.add(SIMD3(w/2, h, d/2), SIMD3(0, 0, 1), SIMD2(uBack, 0))
-        let bg2 = walls.add(SIMD3(0, r, d/2), SIMD3(0, 0, 1), SIMD2(uBack / 2, -0.6))
+        // Back gable (-Z): wall + triangle to ridge.
+        wallQuad(SIMD3(w/2, 0, -d/2), SIMD3(-w/2, 0, -d/2), SIMD3(-w/2, h, -d/2), SIMD3(w/2, h, -d/2),
+                 normal: SIMD3(0, 0, -1), uScale: uBack)
+        let bg0 = walls.add(SIMD3(-w/2, h, -d/2), SIMD3(0, 0, -1), SIMD2(0, 0))
+        let bg1 = walls.add(SIMD3(w/2, h, -d/2), SIMD3(0, 0, -1), SIMD2(uBack, 0))
+        let bg2 = walls.add(SIMD3(0, r, -d/2), SIMD3(0, 0, -1), SIMD2(uBack / 2, -0.6))
         let bp0 = walls.positions[Int(bg0)], bp1 = walls.positions[Int(bg1)], bp2 = walls.positions[Int(bg2)]
-        if simd_dot(simd_cross(bp1 - bp0, bp2 - bp0), SIMD3(0, 0, 1)) >= 0 {
+        if simd_dot(simd_cross(bp1 - bp0, bp2 - bp0), SIMD3(0, 0, -1)) >= 0 {
             walls.triangle(bg0, bg1, bg2)
         } else {
             walls.triangle(bg0, bg2, bg1)
@@ -388,17 +545,21 @@ enum WorldDetailsBuilder {
         let wallNode = SCNNode(geometry: walls.build(material: wall))
         node.addChildNode(wallNode)
 
-        // Front gable (-Z): flat facade with the doorway texture.
+        // Front gable (+Z): flat facade with the doorway texture, facing the ramp.
         var frontMesh = WorldMesh()
-        let fn = SIMD3<Float>(0, 0, -1)
-        let f0 = frontMesh.add(SIMD3(-w/2, 0, -d/2), fn, SIMD2(0, 1))
-        let f1 = frontMesh.add(SIMD3(w/2, 0, -d/2), fn, SIMD2(1, 1))
-        let f2 = frontMesh.add(SIMD3(w/2, h, -d/2), fn, SIMD2(1, 0.25))
-        let f3 = frontMesh.add(SIMD3(-w/2, h, -d/2), fn, SIMD2(0, 0.25))
-        let f4 = frontMesh.add(SIMD3(0, r, -d/2), fn, SIMD2(0.5, 0))
+        let fn = SIMD3<Float>(0, 0, 1)
+        let f0 = frontMesh.add(SIMD3(-w/2, 0, d/2), fn, SIMD2(0, 1))
+        let f1 = frontMesh.add(SIMD3(w/2, 0, d/2), fn, SIMD2(1, 1))
+        let f2 = frontMesh.add(SIMD3(w/2, h, d/2), fn, SIMD2(1, 0.25))
+        let f3 = frontMesh.add(SIMD3(-w/2, h, d/2), fn, SIMD2(0, 0.25))
+        let f4 = frontMesh.add(SIMD3(0, r, d/2), fn, SIMD2(0.5, 0))
         frontMesh.quad(f0, f1, f2, f3, desiredNormal: fn)
-        frontMesh.triangle(f3, f2, f4)
-        // ensure winding faces -Z
+        let fp3 = frontMesh.positions[Int(f3)], fp2 = frontMesh.positions[Int(f2)], fp4 = frontMesh.positions[Int(f4)]
+        if simd_dot(simd_cross(fp2 - fp3, fp4 - fp3), fn) >= 0 {
+            frontMesh.triangle(f3, f2, f4)
+        } else {
+            frontMesh.triangle(f3, f4, f2)
+        }
         let frontNode = SCNNode(geometry: frontMesh.build(material: front))
         node.addChildNode(frontNode)
 
@@ -428,7 +589,7 @@ enum WorldDetailsBuilder {
         return node
     }
 
-    // MARK: - Tower (exterior shaft under the cab eye)
+    // MARK: - Tower (exterior shaft under the cab eye — derives from the layout)
 
     private static func towerNode(airport: AirportLayout, bank: AirfieldLightBank) -> SCNNode {
         let container = SCNNode()
@@ -441,7 +602,7 @@ enum WorldDetailsBuilder {
         // the eye) supplies everything the player sees at eye level. Exterior
         // pieces must stay OUT of the sightline band: sill fascia tops out
         // below the glass, roof fascia floats above the interior ceiling, and
-        // the catwalk rails stay under the runway sightline (~12.7° down).
+        // the catwalk rails stay under the runway sightline.
         let floorY = eye.y - 1.72              // cab floor / catwalk level
         let sillTopY = eye.y - 0.78            // fascia stops below the glass sill
         let roofY = eye.y + 1.55               // exterior roof fascia
@@ -459,7 +620,7 @@ enum WorldDetailsBuilder {
         flare.position = at(floorY - 0.9)
         container.addChildNode(flare)
 
-        // Catwalk floor + low rails (kept below the 12.7° runway sightline).
+        // Catwalk floor + low rails (kept below the runway sightline).
         let walk = SCNNode(geometry: SCNTube(innerRadius: 2.5, outerRadius: 3.4, height: 0.1))
         walk.geometry?.materials = [WorldMat.whitePaintMetal]
         walk.position = at(floorY - 0.05)
@@ -556,7 +717,55 @@ enum WorldDetailsBuilder {
         return container
     }
 
-    // MARK: - Scrub + boulders
+    // MARK: - Bison (A12 — the trademark pair, grazing NE of the ramp)
+
+    private static func bisonNode(airport: AirportLayout, frame: FieldFrame) -> SCNNode {
+        let container = SCNNode()
+        container.name = "bison"
+        let hide = WorldMat.pbr(worldColor(0.335, 0.245, 0.165), roughness: 0.95)
+        let shag = WorldMat.pbr(worldColor(0.225, 0.160, 0.110), roughness: 1.0)
+
+        func bison(at st: V2, yaw: Double) -> SCNNode {
+            // Silhouette-read only: rounded masses, shaggy front, head low,
+            // ~1.7 m at the hump.
+            let b = SCNNode()
+            let world = frame.point(s: st.x, p: st.y)
+            b.position = worldV3(world, airport.groundHeight(at: world))
+            b.eulerAngles.y = Float(yaw)
+
+            let barrel = SCNNode(geometry: SCNBox(width: 1.0, height: 1.0, length: 1.9, chamferRadius: 0.42))
+            barrel.geometry?.materials = [hide]
+            barrel.position = SCNVector3(0, 0.95, -0.15)
+            b.addChildNode(barrel)
+            let hump = SCNNode(geometry: SCNSphere(radius: 0.62))
+            hump.geometry?.materials = [shag]
+            hump.position = SCNVector3(0, 1.12, 0.55)
+            hump.scale = SCNVector3(0.95, 0.92, 1.0)
+            b.addChildNode(hump)
+            let chest = SCNNode(geometry: SCNSphere(radius: 0.52))
+            chest.geometry?.materials = [shag]
+            chest.position = SCNVector3(0, 0.72, 0.78)
+            b.addChildNode(chest)
+            let head = SCNNode(geometry: SCNBox(width: 0.42, height: 0.5, length: 0.62, chamferRadius: 0.16))
+            head.geometry?.materials = [shag]
+            head.position = SCNVector3(0, 0.52, 1.18)   // head low — grazing
+            b.addChildNode(head)
+            for (dx, dz) in [(-0.32, 0.55), (0.32, 0.55), (-0.32, -0.75), (0.32, -0.75)] {
+                let leg = SCNNode(geometry: SCNCylinder(radius: 0.09, height: 0.62))
+                leg.geometry?.materials = [hide]
+                leg.position = SCNVector3(Float(dx), 0.31, Float(dz))
+                b.addChildNode(leg)
+            }
+            return b
+        }
+        container.addChildNode(bison(at: V2(318, 132), yaw: 0.9))
+        container.addChildNode(bison(at: V2(332, 147), yaw: 2.5))
+        let flat = container.flattenedClone()
+        flat.name = "bison"
+        return flat
+    }
+
+    // MARK: - Scrub + boulders (D15 — archetypes, clusters, tints)
 
     private static func scrubNode(airport: AirportLayout, frame: FieldFrame) -> SCNNode {
         let outline = airport.mesaOutline
@@ -579,24 +788,37 @@ enum WorldDetailsBuilder {
             }
             return inside
         }
+        // D19 road corridor (matches WorldAirportBuilder.serviceRoadNode).
+        let roadPts: [(Double, Double)] = [(618, 128), (660, 168), (712, 224), (748, 268), (772, 296)]
+        func nearRoad(_ st: V2) -> Bool {
+            for i in 0..<(roadPts.count - 1) {
+                let a = V2(roadPts[i].0, roadPts[i].1), b = V2(roadPts[i + 1].0, roadPts[i + 1].1)
+                let ab = b - a
+                let t = max(0, min(1, simd_dot(st - a, ab) / simd_dot(ab, ab)))
+                if simd_length(st - (a + ab * t)) < 8 { return true }
+            }
+            return false
+        }
         func isClear(_ st: V2) -> Bool {
             let s = st.x, p = st.y
-            if s > -45 && s < airport.runway.length + 45 && abs(p) < 24 { return false }   // runway strip
-            if s > -30 && s < airport.runway.length + 20 && p > 38 && p < 72 { return false } // Alpha
-            for stub in [10.0, 560.0, 940.0] where s > stub - 14 && s < stub + 14 && p > -6 && p < 72 { return false }
-            if s > WorldAirportBuilder.apronS0 - 12 && s < WorldAirportBuilder.apronS0 + WorldAirportBuilder.apronSLen + 40
-                && p > WorldAirportBuilder.apronP0 - 12 && p < 235 { return false }         // apron + buildings
-            if abs(s - 315) < 9 && abs(p - 40) < 9 { return false }                          // windsock
-            if s > 560 && s < 980 && p > 95 && p < 225 { return false }                      // road corridor
-            if abs(s - 150) < 12 && p < -18 && p > -36 { return false }                      // PAPI
+            if s > -45 && s < airport.runway.length + 45 && abs(p) < 26 { return false }     // runway strip
+            if s > -20 && s < airport.runway.length + 20 && p > 42 && p < 68 { return false } // Alpha
+            for stub in [10.0, 550.0, 880.0] where s > stub - 14 && s < stub + 14 && p > -6 && p < 100 { return false }
+            if s > 395 && s < 660 && p > 55 && p < 200 { return false }   // ramp + infield + buildings + cab
+            if simd_length(st - V2(400, 84)) < 14 { return false }         // windsock + segmented circle
+            if simd_length(st - V2(790, -26.5)) < 10 { return false }      // PVASI
+            if abs(s - 2) < 8 && abs(p) > 15 && abs(p) < 32 { return false } // REIL pair
+            if abs(s - airport.runway.length + 609.6) < 6 && abs(p + 22) < 6 { return false } // signs
+            if abs(s - airport.runway.length + 304.8) < 6 && abs(p + 22) < 6 { return false }
+            if s > 300 && s < 350 && p > 115 && p < 165 { return false }   // bison clearing
+            if nearRoad(st) { return false }
             return true
         }
 
         let container = SCNNode()
         var rng = WorldRand(seed: 0x5C2B)
-        let mats = [WorldMat.scrub1, WorldMat.scrub2, WorldMat.scrub3]
-        var placed = 0
-        var attempts = 0
+        let tints = WorldMat.scrubTints
+
         // Bounding box of the outline for rejection sampling.
         var minX = Double.greatestFiniteMagnitude, maxX = -Double.greatestFiniteMagnitude
         var minZ = Double.greatestFiniteMagnitude, maxZ = -Double.greatestFiniteMagnitude
@@ -604,25 +826,70 @@ enum WorldDetailsBuilder {
             minX = min(minX, p.x); maxX = max(maxX, p.x)
             minZ = min(minZ, p.y); maxZ = max(maxZ, p.y)
         }
-        while placed < 170 && attempts < 4000 {
+
+        // D15 — three archetypes; every bush sinks 0.42·size into the ground.
+        func addBush(at p: V2, size: Double) {
+            let archetype = rng.int(3)
+            let mat = tints[rng.int(tints.count)]
+            let bush = SCNNode()
+            switch archetype {
+            case 0:      // low mounded lobe
+                let sphere = SCNSphere(radius: 1)
+                sphere.segmentCount = 7
+                sphere.materials = [mat]
+                let m = SCNNode(geometry: sphere)
+                m.scale = SCNVector3(Float(size), Float(size * rng.range(0.42, 0.58)),
+                                     Float(size * rng.range(0.8, 1.1)))
+                bush.addChildNode(m)
+            case 1:      // double lobe — big + small
+                let s1 = SCNSphere(radius: 1); s1.segmentCount = 7; s1.materials = [mat]
+                let m1 = SCNNode(geometry: s1)
+                m1.scale = SCNVector3(Float(size * 0.9), Float(size * 0.5), Float(size * 0.85))
+                bush.addChildNode(m1)
+                let s2 = SCNSphere(radius: 1); s2.segmentCount = 6; s2.materials = [mat]
+                let m2 = SCNNode(geometry: s2)
+                m2.scale = SCNVector3(Float(size * 0.55), Float(size * 0.42), Float(size * 0.5))
+                m2.position = SCNVector3(Float(size * 0.7), Float(size * 0.05), Float(size * 0.2))
+                bush.addChildNode(m2)
+            default:     // upright rounded cone (young toyon)
+                let cone = SCNCone(topRadius: CGFloat(size * 0.18), bottomRadius: CGFloat(size * 0.62),
+                                   height: CGFloat(size * 0.95))
+                cone.radialSegmentCount = 7
+                cone.materials = [mat]
+                let m = SCNNode(geometry: cone)
+                m.position.y = Float(size * 0.42)
+                bush.addChildNode(m)
+            }
+            let y = airport.groundHeight(at: p)
+            // Half-height ≈ 0.5·size; sinking 0.42·size roots every bush (D15).
+            bush.position = worldV3(p, y + size * 0.08)
+            bush.eulerAngles.y = Float(rng.range(0, .pi * 2))
+            container.addChildNode(bush)
+        }
+
+        // Cluster sampling: 40 parents, 2–5 children within 8 m, cap ~220.
+        var placed = 0
+        var parents = 0
+        var attempts = 0
+        while parents < 40 && attempts < 6000 && placed < 220 {
             attempts += 1
             let p = V2(rng.range(minX, maxX), rng.range(minZ, maxZ))
             guard insidePolygon(p), isClear(frame.station(p)) else { continue }
-            let size = rng.range(0.8, 2.4)
-            let sphere = SCNSphere(radius: 1)
-            sphere.segmentCount = 7
-            sphere.materials = [mats[rng.int(mats.count)]]
-            let bush = SCNNode(geometry: sphere)
-            let y = airport.groundHeight(at: p)
-            bush.position = worldV3(p, y + size * 0.32)
-            bush.scale = SCNVector3(Float(size), Float(size * rng.range(0.42, 0.6)), Float(size * rng.range(0.8, 1.1)))
-            bush.eulerAngles.y = Float(rng.range(0, .pi * 2))
-            container.addChildNode(bush)
+            parents += 1
+            addBush(at: p, size: rng.range(1.2, 2.6))
             placed += 1
+            let children = 2 + rng.int(4)
+            for _ in 0..<children where placed < 220 {
+                let q = p + V2(rng.range(-8, 8), rng.range(-8, 8))
+                guard insidePolygon(q), isClear(frame.station(q)) else { continue }
+                addBush(at: q, size: rng.range(0.7, 1.7))
+                placed += 1
+            }
         }
+
         // A few boulders near the rim.
         for i in 0..<12 {
-            let idx = (i * 5 + 3) % outline.count
+            let idx = (i * 17 + 5) % outline.count
             let p = centroid + (outline[idx] - centroid) * rng.range(0.82, 0.90)
             guard isClear(frame.station(p)) else { continue }
             let size = rng.range(0.7, 1.8)

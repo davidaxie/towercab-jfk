@@ -11,6 +11,7 @@
 		05D6B0878AE40D7570A2262F /* AirportGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72C3592F6A7A35069B0B53D5 /* AirportGeometry.swift */; };
 		0B6A19A4A1CABE05385C3F26 /* SimTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00A0B0D19C68298EBE596A3C /* SimTypes.swift */; };
 		18A44D8A2F739BF09A003827 /* RadialBloom.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BCE69057ED82A82E2CC30B8 /* RadialBloom.swift */; };
+		1CEA18B4E101A26258DA0A5F /* PlaythroughUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4794F6A2F65D9D617045DAC /* PlaythroughUITests.swift */; };
 		33DBE51EDF288359DF9BF82F /* Toasts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FC48E1D135429E1BB8B71F7 /* Toasts.swift */; };
 		41D8A08E95A4E0700C2FF18E /* SimEngine+Tick.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71A9CBD0472BB4CD48B619D6 /* SimEngine+Tick.swift */; };
 		4DA2C3F245B7084CE7A0BEF8 /* Scoring.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6494F2E812766DC86BC0F71 /* Scoring.swift */; };
@@ -44,8 +45,19 @@
 		FCB3A22BCD4519E3E4644731 /* RadioLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BC27EEC28356E65930A1AF5 /* RadioLog.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		6709B53DE0AC92F7BE5D4399 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 432F65A35D5E5F64424DED39 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 59CB0869A79C63DF499E4DA6;
+			remoteInfo = TowerCabSlammed;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		00A0B0D19C68298EBE596A3C /* SimTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimTypes.swift; sourceTree = "<group>"; };
+		042851241566118453A3E5C4 /* TowerCabSlammedUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = TowerCabSlammedUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		0BCE69057ED82A82E2CC30B8 /* RadialBloom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RadialBloom.swift; sourceTree = "<group>"; };
 		0C993FCF197989CADE00CA24 /* KAVXAirport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KAVXAirport.swift; sourceTree = "<group>"; };
 		11A68F7F6D9E175C682C1D75 /* StripRail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StripRail.swift; sourceTree = "<group>"; };
@@ -72,6 +84,7 @@
 		B56CCA83783FA52A8044C2FC /* ShiftScript.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShiftScript.swift; sourceTree = "<group>"; };
 		B70DF568B0EA912B6AFE327C /* WorldAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorldAPI.swift; sourceTree = "<group>"; };
 		C3E991CDFC2B95EA7D0709FC /* CabInterior.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CabInterior.swift; sourceTree = "<group>"; };
+		C4794F6A2F65D9D617045DAC /* PlaythroughUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaythroughUITests.swift; sourceTree = "<group>"; };
 		D414B5B3FFBDAC56EE312726 /* Terrain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Terrain.swift; sourceTree = "<group>"; };
 		D6494F2E812766DC86BC0F71 /* Scoring.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Scoring.swift; sourceTree = "<group>"; };
 		D72DF921ECD6B23B0FCBB246 /* Conflict.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Conflict.swift; sourceTree = "<group>"; };
@@ -121,6 +134,14 @@
 			path = World;
 			sourceTree = "<group>";
 		};
+		3D1D63E47759A6BFA1FDA08A /* UITests */ = {
+			isa = PBXGroup;
+			children = (
+				C4794F6A2F65D9D617045DAC /* PlaythroughUITests.swift */,
+			);
+			path = UITests;
+			sourceTree = "<group>";
+		};
 		6E7AFA50F66375592AA35D97 /* TowerCabSlammed */ = {
 			isa = PBXGroup;
 			children = (
@@ -155,6 +176,7 @@
 			isa = PBXGroup;
 			children = (
 				35082A6B249821942BC37392 /* TowerCabSlammed.app */,
+				042851241566118453A3E5C4 /* TowerCabSlammedUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -180,6 +202,7 @@
 			isa = PBXGroup;
 			children = (
 				6E7AFA50F66375592AA35D97 /* TowerCabSlammed */,
+				3D1D63E47759A6BFA1FDA08A /* UITests */,
 				ADC6A4D3BF59724A93FA9877 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -204,6 +227,24 @@
 			productReference = 35082A6B249821942BC37392 /* TowerCabSlammed.app */;
 			productType = "com.apple.product-type.application";
 		};
+		FF9530739BD3927FD27B2D4E /* TowerCabSlammedUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B8BB70F0708870D117C1792A /* Build configuration list for PBXNativeTarget "TowerCabSlammedUITests" */;
+			buildPhases = (
+				C8E90B1676CB979CC3967299 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				8714C8A1E7B5B901B6FB5BA4 /* PBXTargetDependency */,
+			);
+			name = TowerCabSlammedUITests;
+			packageProductDependencies = (
+			);
+			productName = TowerCabSlammedUITests;
+			productReference = 042851241566118453A3E5C4 /* TowerCabSlammedUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -216,6 +257,11 @@
 					59CB0869A79C63DF499E4DA6 = {
 						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
+					};
+					FF9530739BD3927FD27B2D4E = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+						TestTargetID = 59CB0869A79C63DF499E4DA6;
 					};
 				};
 			};
@@ -234,6 +280,7 @@
 			projectRoot = "";
 			targets = (
 				59CB0869A79C63DF499E4DA6 /* TowerCabSlammed */,
+				FF9530739BD3927FD27B2D4E /* TowerCabSlammedUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -281,7 +328,23 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C8E90B1676CB979CC3967299 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1CEA18B4E101A26258DA0A5F /* PlaythroughUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		8714C8A1E7B5B901B6FB5BA4 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 59CB0869A79C63DF499E4DA6 /* TowerCabSlammed */;
+			targetProxy = 6709B53DE0AC92F7BE5D4399 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		1A0FDF051FD27DDF8852ACDC /* Debug */ = {
@@ -298,6 +361,23 @@
 				PRODUCT_BUNDLE_IDENTIFIER = "com.davidxie.towercab-slammed";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		1EEE6937C7F8E76EC5837BC0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				INFOPLIST_FILE = TowerCabSlammed/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.davidxie.towercab-slammed.uitests";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = TowerCabSlammed;
 			};
 			name = Debug;
 		};
@@ -386,6 +466,23 @@
 			};
 			name = Debug;
 		};
+		80872AC75E677BDA7F3C87BE /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				INFOPLIST_FILE = TowerCabSlammed/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.davidxie.towercab-slammed.uitests";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = TowerCabSlammed;
+			};
+			name = Release;
+		};
 		D9FF371E35FC0CD4EF00E551 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -464,6 +561,15 @@
 			buildConfigurations = (
 				47075211D717BF24815B4990 /* Debug */,
 				D9FF371E35FC0CD4EF00E551 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		B8BB70F0708870D117C1792A /* Build configuration list for PBXNativeTarget "TowerCabSlammedUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1EEE6937C7F8E76EC5837BC0 /* Debug */,
+				80872AC75E677BDA7F3C87BE /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

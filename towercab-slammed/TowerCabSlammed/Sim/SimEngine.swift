@@ -51,13 +51,23 @@ public final class SimEngine {
     var retiredDelaySum: Double = 0
     var retiredCount = 0
     var lastSpawnAt: Double = -100
+    // B11 — par accumulated from traffic that ACTUALLY spawned, so cap-
+    // abandoned orders never grade against the player.
+    var spawnedParScore: Int = 0
+    var spawnedParMovements: Int = 0
+    // B21 — running count of arrivals that parked with no free spot.
+    var overflowCount = 0
 
     public init(airport: AirportLayout, seed: UInt64) {
         self.airport = airport
         self.seed = seed
         self.rng = SeededRNG(seed: seed)
         self.script = ShiftScript.standardShift(seed: seed)
-        let wind = Wind(directionDeg: 240, speedKts: 8, gustKts: 14)
+        // B26 — seed-derived so every shift's wind reads a little different.
+        var wrng = SeededRNG(seed: seed ^ 0xA17C0DE_5EED_9E37)
+        let dir = (wrng.double(in: 210...260) / 10).rounded() * 10
+        let spd = wrng.double(in: 4...12).rounded()
+        let wind = Wind(directionDeg: dir, speedKts: spd, gustKts: spd + 5)
         self.wind = wind
         self.radio = RadioVoice(seed: seed, wind: wind)
         let empty = SimSnapshot(simTime: 0, tickIndex: 0, aircraft: [], score: 0,

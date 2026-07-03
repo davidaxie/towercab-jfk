@@ -52,7 +52,10 @@ struct HUDRootView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
             if let bloom = state.bloom {
-                RadialBloomView(bloom: bloom, screenSize: size, actions: state.actions)
+                // C19 — keep the bloom clear of the rail when strips are up.
+                RadialBloomView(bloom: bloom, screenSize: size,
+                                railInset: state.strips.isEmpty ? 0 : Rail.screenFootprint,
+                                actions: state.actions)
                     .id(bloom.aircraftID)   // re-run entrance per aircraft
             }
         }

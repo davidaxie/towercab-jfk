@@ -14,9 +14,17 @@ struct ConflictConstants {
     static let amberThreshold = 8.0      // M ≥ 8 → green
     static let redSustainSeconds = 1.0
     static let selfPreservationTa = 5.0  // unresolved red inside this → pilot bails
-    static let lineUpWaitNeed = 22.0     // a waiting departure "needs" Ta > 22 s
+    static let lineUpWaitNeed = 22.0     // legacy constant (B9: superseded by timeUntilAirborne)
+    /// B9 — player reaction allowance folded into a LUAW occupant's clear time.
+    static let lineUpReaction = 5.0
     static let rolloutBuffer = 3.0
     static let liftoffBuffer = 2.0
+    /// B6/B8 — the −600 only lands after this much continuous non-green warning
+    /// on the pair; anything faster resolves as an ordinary pilot go-around.
+    static let selfPresWarning = 15.0
+    /// B8 — a commit command this close to amber onset marks the episode
+    /// player-manufactured (pays nothing, counts as no opportunity).
+    static let manufactureWindow = 3.0
 }
 
 struct PairKey: Hashable {
@@ -30,8 +38,12 @@ struct PairKey: Hashable {
 struct PairState {
     var band: ConflictBand = .green
     var redSince: Double? = nil
+    /// Start of the current continuous amber/red contact (nil while green).
+    var amberSince: Double? = nil
     var sustained = false
     var opportunityCounted = false
+    /// B8 — episode was created by a player commit command; pays nothing.
+    var playerManufactured = false
     var lastMargin: Double = 0
 }
 
@@ -41,6 +53,9 @@ struct ConflictProjection {
     let margin: Double        // seconds; the Gap Arc value
     let timeToThreshold: Double
     let band: ConflictBand
+    /// B8 — set when this pair would be non-green within seconds of a player
+    /// commit command (the episode is player-made, not authored pressure).
+    var manufactured: Bool = false
 }
 
 struct ConflictTracker {
@@ -69,9 +84,16 @@ struct ConflictTracker {
             st.lastMargin = p.margin
             if p.band < .amber {
                 st.redSince = nil
-            } else if !st.opportunityCounted {
-                st.opportunityCounted = true
-                newOpportunities += 1
+                st.amberSince = nil
+            } else {
+                if st.amberSince == nil {
+                    st.amberSince = now
+                    st.playerManufactured = p.manufactured   // B8: decided at onset
+                }
+                if !st.opportunityCounted {
+                    st.opportunityCounted = true
+                    if !st.playerManufactured { newOpportunities += 1 }
+                }
             }
             if p.band == .red {
                 if st.redSince == nil { st.redSince = now }

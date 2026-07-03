@@ -17,6 +17,70 @@ private let kBays = 9
 private let kGlassRadius: Float = 2.5
 private let kGlassTilt: Float = -0.262   // ~15°, top leans outward
 
+/// D1: one lathed truncated-cone glass band (sill r 2.5 @ y −0.72 → head
+/// r ~3.02 @ y +1.22, matching the 15° top-out rake). A single surface can't
+/// double-blend at bay seams, which is what painted the two sky shafts.
+private func glassBandNode(material: SCNMaterial) -> SCNNode {
+    let segments = 36
+    let yBot: Float = -0.72, yTop: Float = 1.22
+    let rBot: Float = kGlassRadius
+    let rTop: Float = rBot + (yTop - yBot) * tan(0.262)   // ≈ 3.02
+    var positions: [SCNVector3] = []
+    var normals: [SCNVector3] = []
+    var uvs: [CGPoint] = []
+    let slope = (rTop - rBot) / (yTop - yBot)
+    let k = 1 / sqrt(1 + slope * slope)
+    for (y, r, v) in [(yBot, rBot, CGFloat(0)), (yTop, rTop, CGFloat(1))] {
+        for j in 0...segments {
+            let t = Float(j) / Float(segments) * 2 * .pi
+            let c = cos(t), s = sin(t)
+            positions.append(SCNVector3(r * c, y, r * s))
+            normals.append(SCNVector3(-c * k, slope * k, -s * k))  // faces the eye
+            uvs.append(CGPoint(x: CGFloat(j) / CGFloat(segments), y: v))
+        }
+    }
+    var indices: [UInt32] = []
+    let row = UInt32(segments + 1)
+    for j in 0..<UInt32(segments) {
+        indices.append(contentsOf: [j, j + row, j + 1, j + 1, j + row, j + row + 1])
+    }
+    let geo = SCNGeometry(sources: [SCNGeometrySource(vertices: positions),
+                                    SCNGeometrySource(normals: normals),
+                                    SCNGeometrySource(textureCoordinates: uvs)],
+                          elements: [SCNGeometryElement(indices: indices, primitiveType: .triangles)])
+    geo.materials = [material]
+    return SCNNode(geometry: geo)
+}
+
+/// Flat annulus with planar UVs (u,v map straight onto x,z) so a top-down
+/// painted texture lands undistorted on the console work surface.
+private func flatRingNode(inner: Float, outer: Float, segments: Int,
+                          material: SCNMaterial) -> SCNNode {
+    var positions: [SCNVector3] = []
+    var normals: [SCNVector3] = []
+    var uvs: [CGPoint] = []
+    for r in [inner, outer] {
+        for j in 0...segments {
+            let t = Float(j) / Float(segments) * 2 * .pi
+            let x = r * cos(t), z = r * sin(t)
+            positions.append(SCNVector3(x, 0, z))
+            normals.append(SCNVector3(0, 1, 0))
+            uvs.append(CGPoint(x: CGFloat(x / outer + 1) / 2, y: CGFloat(z / outer + 1) / 2))
+        }
+    }
+    var indices: [UInt32] = []
+    let row = UInt32(segments + 1)
+    for j in 0..<UInt32(segments) {
+        indices.append(contentsOf: [j, j + 1, j + row, j + 1, j + row + 1, j + row])
+    }
+    let geo = SCNGeometry(sources: [SCNGeometrySource(vertices: positions),
+                                    SCNGeometrySource(normals: normals),
+                                    SCNGeometrySource(textureCoordinates: uvs)],
+                          elements: [SCNGeometryElement(indices: indices, primitiveType: .triangles)])
+    geo.materials = [material]
+    return SCNNode(geometry: geo)
+}
+
 func buildCabInteriorNode() -> SCNNode {
     let root = SCNNode()
     root.name = "cabInterior"
@@ -25,9 +89,10 @@ func buildCabInteriorNode() -> SCNNode {
     // Palette — warm charcoal-green enamel and dark consoles.
     let mullionMat = pbrMaterial(UIColor(red: 0.12, green: 0.15, blue: 0.13, alpha: 1), roughness: 0.32)
     let frameMat = pbrMaterial(UIColor(red: 0.10, green: 0.12, blue: 0.11, alpha: 1), roughness: 0.45)
-    let consoleMat = pbrMaterial(UIColor(red: 0.10, green: 0.10, blue: 0.11, alpha: 1), roughness: 0.42)
+    let consoleMat = pbrMaterial(UIColor(red: 0.10, green: 0.10, blue: 0.11, alpha: 1), roughness: 0.60)
     let panelMat = pbrMaterial(UIColor(red: 0.13, green: 0.13, blue: 0.145, alpha: 1), roughness: 0.55)
-    let ceilMat = pbrMaterial(UIColor(red: 0.07, green: 0.08, blue: 0.075, alpha: 1), roughness: 0.8)
+    // A17: FAA cabs paint the ceiling matte black to kill glass reflections.
+    let ceilMat = pbrMaterial(UIColor(white: 0.04, alpha: 1), roughness: 0.95)
     let floorMat = pbrMaterial(UIColor(red: 0.15, green: 0.14, blue: 0.13, alpha: 1), roughness: 0.85)
     let steelMat = pbrMaterial(UIColor(white: 0.35, alpha: 1), roughness: 0.5, metalness: 0.6)
 
@@ -38,7 +103,7 @@ func buildCabInteriorNode() -> SCNNode {
     }
     let step = 2 * Float.pi / Float(kBays)
 
-    // --- Glass panes (NOT flattened: they need renderingOrder + own material)
+    // --- Glass band (NOT flattened: it needs renderingOrder + own material)
     let glassMat = SCNMaterial()
     glassMat.lightingModel = .blinn
     glassMat.diffuse.contents = UIColor(red: 0.04, green: 0.07, blue: 0.08, alpha: 0.055)
@@ -50,17 +115,9 @@ func buildCabInteriorNode() -> SCNNode {
     glassMat.writesToDepthBuffer = false
     glassMat.blendMode = .alpha
 
-    let paneGeo = SCNPlane(width: 1.74, height: 1.95)
-    paneGeo.materials = [glassMat]
-    for i in 0..<kBays {
-        let holder = bay(step * Float(i))
-        let pane = SCNNode(geometry: paneGeo)
-        pane.position = SCNVector3(0, 0.25, -kGlassRadius)
-        pane.eulerAngles.x = kGlassTilt
-        pane.renderingOrder = 950
-        holder.addChildNode(pane)
-        root.addChildNode(holder)
-    }
+    let glassBand = glassBandNode(material: glassMat)
+    glassBand.renderingOrder = 950
+    root.addChildNode(glassBand)
 
     // --- Mullions (slim, ~7 cm) at bay boundaries
     let mullionGeo = SCNBox(width: 0.072, height: 2.08, length: 0.11, chamferRadius: 0.015)
@@ -99,10 +156,20 @@ func buildCabInteriorNode() -> SCNNode {
     staticRoot.addChildNode(overhang)
 
     // --- Wrap-around console, top surface 0.5 m below the eye
-    let consoleTop = SCNNode(geometry: SCNTube(innerRadius: 1.45, outerRadius: 2.25, height: 0.055))
+    // D28: inner radius 1.38 so the lip overhangs (and hides) the strip ring.
+    let consoleTop = SCNNode(geometry: SCNTube(innerRadius: 1.38, outerRadius: 2.25, height: 0.055))
     consoleTop.geometry?.materials = [consoleMat]
     consoleTop.position.y = -0.53
     staticRoot.addChildNode(consoleTop)
+    // D29: painted work surface — panel seams, screws, taped charts, coffee ring.
+    let deskMat = SCNMaterial()
+    deskMat.lightingModel = .physicallyBased
+    deskMat.diffuse.contents = ArtTextures.consoleTopSurface()
+    deskMat.roughness.contents = 0.60
+    deskMat.metalness.contents = 0.0
+    let desk = flatRingNode(inner: 1.38, outer: 2.25, segments: 48, material: deskMat)
+    desk.position.y = -0.501
+    staticRoot.addChildNode(desk)
     let skirt = SCNNode(geometry: SCNTube(innerRadius: 2.2, outerRadius: 2.27, height: 0.55))
     skirt.geometry?.materials = [panelMat]
     skirt.position.y = -0.82
@@ -122,7 +189,7 @@ func buildCabInteriorNode() -> SCNNode {
     let stripMat = SCNMaterial()
     stripMat.lightingModel = .constant
     stripMat.diffuse.contents = UIColor(red: 0.55, green: 0.30, blue: 0.10, alpha: 1)
-    stripMat.emission.contents = UIColor(red: 0.48, green: 0.30, blue: 0.12, alpha: 1)
+    stripMat.emission.contents = UIColor(red: 0.30, green: 0.18, blue: 0.08, alpha: 1)  // D28
     let strip = SCNNode(geometry: SCNTube(innerRadius: 1.42, outerRadius: 1.455, height: 0.024))
     strip.geometry?.materials = [stripMat]
     strip.position.y = -0.575
@@ -157,9 +224,9 @@ func buildCabInteriorNode() -> SCNNode {
 
     // --- Props on the console -------------------------------------------------
 
-    // Clipboard, slightly askew (static).
+    // Clipboard, slightly askew (static). D30: bayed into the default frame corner.
     do {
-        let holder = bay(0.16)
+        let holder = bay(-0.30)
         let group = SCNNode()
         group.position = SCNVector3(0, -0.5, -1.72)
         group.eulerAngles.y = 0.3
@@ -183,8 +250,9 @@ func buildCabInteriorNode() -> SCNNode {
     }
 
     // Headset resting console-right, with a coiled-cable hint (static).
+    // D30: bayed into the default frame corner opposite the mug.
     do {
-        let holder = bay(0.62)
+        let holder = bay(-0.85)
         let group = SCNNode()
         group.position = SCNVector3(0, -0.49, -1.66)
         let padMat = pbrMaterial(UIColor(white: 0.12, alpha: 1), roughness: 0.75)
@@ -211,17 +279,104 @@ func buildCabInteriorNode() -> SCNNode {
         staticRoot.addChildNode(holder)
     }
 
+    // A17: wind/altimeter readout — dark panel, two amber 7-seg number groups.
+    do {
+        let holder = bay(0.40)
+        let panel = SCNNode(geometry: SCNBox(width: 0.30, height: 0.11, length: 0.035, chamferRadius: 0.008))
+        panel.geometry?.materials = [pbrMaterial(UIColor(white: 0.06, alpha: 1), roughness: 0.5)]
+        panel.position = SCNVector3(0, -0.61, -1.58)
+        panel.eulerAngles.x = 0.5
+        let faceMat = SCNMaterial()
+        faceMat.lightingModel = .constant
+        faceMat.diffuse.contents = UIColor(white: 0.01, alpha: 1)
+        faceMat.emission.contents = ArtTextures.windAltReadout()
+        faceMat.emission.intensity = 0.7
+        let face = SCNNode(geometry: SCNPlane(width: 0.27, height: 0.085))
+        face.geometry?.materials = [faceMat]
+        face.position = SCNVector3(0, 0, 0.019)
+        panel.addChildNode(face)
+        holder.addChildNode(panel)
+        staticRoot.addChildNode(holder)
+    }
+
+    // A17: light gun on its hook mount — grey cone-nosed cylinder, nose down.
+    do {
+        let holder = bay(0.72)
+        let group = SCNNode()
+        group.position = SCNVector3(0, -0.50, -1.86)
+        let grey = pbrMaterial(UIColor(white: 0.42, alpha: 1), roughness: 0.5, metalness: 0.3)
+        let post = SCNNode(geometry: SCNCylinder(radius: 0.012, height: 0.30))
+        post.geometry?.materials = [steelMat]
+        post.position.y = 0.15
+        group.addChildNode(post)
+        let hook = SCNNode(geometry: SCNTorus(ringRadius: 0.022, pipeRadius: 0.005))
+        hook.geometry?.materials = [steelMat]
+        hook.eulerAngles.z = .pi / 2
+        hook.position = SCNVector3(0.032, 0.29, 0)
+        group.addChildNode(hook)
+        let gun = SCNNode()
+        gun.position = SCNVector3(0.055, 0.16, 0)
+        gun.eulerAngles.z = 0.12   // hangs a touch off plumb
+        let bodyCyl = SCNNode(geometry: SCNCylinder(radius: 0.034, height: 0.17))
+        bodyCyl.geometry?.materials = [grey]
+        gun.addChildNode(bodyCyl)
+        let nose = SCNNode(geometry: SCNCone(topRadius: 0.034, bottomRadius: 0.012, height: 0.085))
+        nose.geometry?.materials = [grey]
+        nose.position.y = -0.127
+        gun.addChildNode(nose)
+        let grip = SCNNode(geometry: SCNBox(width: 0.02, height: 0.07, length: 0.035, chamferRadius: 0.006))
+        grip.geometry?.materials = [pbrMaterial(UIColor(white: 0.14, alpha: 1), roughness: 0.7)]
+        grip.position = SCNVector3(0, 0.055, 0.045)
+        grip.eulerAngles.x = -0.35
+        gun.addChildNode(grip)
+        group.addChildNode(gun)
+        holder.addChildNode(group)
+        staticRoot.addChildNode(holder)
+    }
+
+    // A17: binoculars resting on the console.
+    do {
+        let holder = bay(1.05)
+        let group = SCNNode()
+        group.position = SCNVector3(0, -0.475, -1.70)
+        group.eulerAngles = SCNVector3(1.35, 0.5, 0)   // lying down, slightly askew
+        let shell = pbrMaterial(UIColor(white: 0.10, alpha: 1), roughness: 0.65)
+        for s in [Float(-1), Float(1)] {
+            let barrel = SCNNode(geometry: SCNCylinder(radius: 0.026, height: 0.13))
+            barrel.geometry?.materials = [shell]
+            barrel.position = SCNVector3(0.037 * s, 0, 0)
+            group.addChildNode(barrel)
+            let objective = SCNNode(geometry: SCNCylinder(radius: 0.030, height: 0.035))
+            objective.geometry?.materials = [shell]
+            objective.position = SCNVector3(0.037 * s, -0.055, 0)
+            group.addChildNode(objective)
+        }
+        let bridge = SCNNode(geometry: SCNBox(width: 0.05, height: 0.05, length: 0.024, chamferRadius: 0.007))
+        bridge.geometry?.materials = [shell]
+        group.addChildNode(bridge)
+        holder.addChildNode(group)
+        staticRoot.addChildNode(holder)
+    }
+
     // Coffee mug console-left — kept dynamic so its steam emitter lines up.
     do {
         let holder = bay(-0.55)
         let group = SCNNode()
         group.position = SCNVector3(0, -0.5, -1.68)
-        let ceramic = pbrMaterial(UIColor(red: 0.52, green: 0.49, blue: 0.45, alpha: 1), roughness: 0.4)
+        // D38: true ceramic — tighter roughness with subtle kiln variation.
+        let ceramic = pbrMaterial(UIColor(red: 0.52, green: 0.49, blue: 0.45, alpha: 1), roughness: 0.32)
+        ceramic.roughness.contents = ArtTextures.ceramicRoughness()
         let cup = SCNNode(geometry: SCNCylinder(radius: 0.047, height: 0.115))
         (cup.geometry as? SCNCylinder)?.radialSegmentCount = 20
         cup.geometry?.materials = [ceramic]
         cup.position.y = 0.058
         group.addChildNode(cup)
+        // Darker glaze ring where the dip left off at the lip.
+        let glaze = pbrMaterial(UIColor(red: 0.30, green: 0.22, blue: 0.17, alpha: 1), roughness: 0.22)
+        let lip = SCNNode(geometry: SCNTorus(ringRadius: 0.0445, pipeRadius: 0.0038))
+        lip.geometry?.materials = [glaze]
+        lip.position.y = 0.1155
+        group.addChildNode(lip)
         let coffee = SCNNode(geometry: SCNCylinder(radius: 0.040, height: 0.004))
         coffee.geometry?.materials = [pbrMaterial(UIColor(red: 0.13, green: 0.07, blue: 0.03, alpha: 1), roughness: 0.12)]
         coffee.position.y = 0.113

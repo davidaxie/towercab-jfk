@@ -11,6 +11,7 @@ import SwiftUI
 public protocol GameActions: AnyObject {
     func startShift()
     func restartShift()
+    func togglePause()
     func stripTapped(_ id: AircraftID)
     func stripDoubleTapped(_ id: AircraftID)
     func verbSelected(_ id: AircraftID, command: Command)
@@ -54,8 +55,11 @@ public struct VerbOption: Identifiable, Equatable {
     public var id: String { command.label }
     public var command: Command
     public var style: Style
-    public init(command: Command, style: Style = .standard) {
-        self.command = command; self.style = style
+    /// Verb sets are FROZEN when the bloom opens (capsules never move or swap
+    /// under a finger); commands that become illegal mid-open render disabled.
+    public var enabled: Bool
+    public init(command: Command, style: Style = .standard, enabled: Bool = true) {
+        self.command = command; self.style = style; self.enabled = enabled
     }
 }
 
@@ -114,6 +118,7 @@ public final class UIState: ObservableObject {
     @Published public var radioLog: [RadioLine] = []
     @Published public var score: Int = 0
     @Published public var streakMultiplier: Int = 1
+    @Published public var paused: Bool = false
     @Published public var shiftClock: String = "6:00"
     @Published public var shiftPhase: ShiftPhase = .ramp
     @Published public var windText: String = "240° 8G14"

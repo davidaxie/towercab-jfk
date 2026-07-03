@@ -4,9 +4,11 @@ import UIKit
 import simd
 
 // =============================================================================
-// Airport paved surfaces — runway ribbon (rides the midfield hump), taxiways
-// with yellow centerlines, hold-short bar, apron slab with tiedowns, and the
-// dirt service road. Geometry follows AirportLayout.kavx verbatim.
+// Airport paved surfaces — the 2019 concrete runway riding the real asymmetric
+// hump, taxiways with clipped centerlines + double edge lines (D2/D16), the SE
+// midfield ramp, the dirt tiedown infield with its cable rows (A8), DC-3 fuel
+// pit covers, the hold-short bar, and the dirt service road. Geometry follows
+// AirportLayout.kavx verbatim.
 // =============================================================================
 
 enum WorldAirportBuilder {
@@ -16,22 +18,33 @@ enum WorldAirportBuilder {
     static let stripeLift = 0.11
     static let decalLift = 0.14
 
+    /// Ramp + infield rects in runway-frame coordinates (shared with
+    /// GroundDetails so buildings hug their edges).
+    static let apronS0 = 420.0, apronSLen = 200.0
+    static let apronP0 = 96.0, apronPLen = 54.0
+    static let infieldS0 = 430.0, infieldSLen = 180.0
+    static let infieldP0 = 62.0, infieldPLen = 34.0
+    /// Spots with p beyond this are on the paved ramp; the rest are dirt (A8).
+    static let pavedSpotMinP = 95.0
+
     static func build(into root: SCNNode, airport: AirportLayout) {
         let frame = FieldFrame(airport)
         root.addChildNode(runwayNode(airport: airport))
-        root.addChildNode(taxiwayNodes(airport: airport))
+        root.addChildNode(taxiwayNodes(airport: airport, frame: frame))
         root.addChildNode(apronNode(airport: airport, frame: frame))
+        root.addChildNode(infieldNode(airport: airport, frame: frame))
+        root.addChildNode(fuelPitNode(airport: airport, frame: frame))
         root.addChildNode(holdShortNode(airport: airport, frame: frame))
         root.addChildNode(serviceRoadNode(airport: airport, frame: frame))
     }
 
-    // MARK: - Runway
+    // MARK: - Runway (A2/A3 — 914.4 × 22.9 m fresh concrete)
 
     private static func runwayNode(airport: AirportLayout) -> SCNNode {
         let rw = airport.runway
         let material = WorldMat.pbr(
             WorldTex.runway(lengthMeters: rw.length, widthMeters: rw.width),
-            roughness: 0.87)
+            roughness: 0.62)
         material.diffuse.wrapS = .clamp
         material.diffuse.wrapT = .clamp
         // Ribbon from threshold B (v=0) to A (v=1); u=0 on the +perp side,
@@ -39,7 +52,7 @@ enum WorldAirportBuilder {
         let geometry = worldRibbonGeometry(points: [rw.thresholdB, rw.thresholdA],
                                            width: rw.width, lift: pavementLift,
                                            airport: airport, vPerMeter: nil,
-                                           material: material, step: 10)
+                                           material: material, step: 8)
         let node = SCNNode(geometry: geometry)
         node.name = "runway"
         return node
@@ -47,71 +60,91 @@ enum WorldAirportBuilder {
 
     // MARK: - Taxiways
 
-    private static func taxiwayNodes(airport: AirportLayout) -> SCNNode {
-        let container = SCNNode()
-        for tw in airport.taxiways {
-            let asphalt = worldRibbonGeometry(points: tw.points, width: tw.width,
-                                              lift: pavementLift, airport: airport,
-                                              vPerMeter: 1.0 / 14.0,
-                                              material: WorldMat.taxiAsphalt)
-            container.addChildNode(SCNNode(geometry: asphalt))
-            let stripe = worldRibbonGeometry(points: tw.points, width: 0.35,
-                                             lift: stripeLift, airport: airport,
-                                             vPerMeter: 1.0, material: WorldMat.stripeYellow)
-            container.addChildNode(SCNNode(geometry: stripe))
+    /// D2 — clip any centerline endpoint that touches the runway so the stub
+    /// ribbon starts at the runway edge + 0.5 m (sim routes untouched).
+    private static func clippedToRunwayEdge(_ points: [V2], frame: FieldFrame,
+                                            halfWidth: Double, margin: Double) -> [V2] {
+        let clipP = halfWidth + margin
+        return points.map { pt in
+            let st = frame.station(pt)
+            guard abs(st.y) < clipP, st.x > -30, st.x < frame.length + 30 else { return pt }
+            return frame.point(s: st.x, p: st.y < 0 ? -clipP : clipP)
         }
-        // Apron ↔ Alpha connector (first leg of the layout's taxi-out route).
-        let connector = Array(airport.routeTaxiOut.prefix(2))
-        if connector.count == 2 {
-            let asphalt = worldRibbonGeometry(points: connector, width: 12,
+    }
+
+    private static func taxiwayNodes(airport: AirportLayout, frame: FieldFrame) -> SCNNode {
+        let container = SCNNode()
+        let runwayHalf = airport.runway.width / 2
+        let holdBarP = frame.station(airport.holdShortPoint).y
+
+        for tw in airport.taxiways {
+            let ribbon = clippedToRunwayEdge(tw.points, frame: frame,
+                                             halfWidth: runwayHalf, margin: 0.5)
+            let asphalt = worldRibbonGeometry(points: ribbon, width: tw.width,
                                               lift: pavementLift, airport: airport,
                                               vPerMeter: 1.0 / 14.0,
                                               material: WorldMat.taxiAsphalt)
             container.addChildNode(SCNNode(geometry: asphalt))
-            let stripe = worldRibbonGeometry(points: connector, width: 0.35,
+
+            // Centerline — clipped at the hold-short bar on the departure stub
+            // (D16: never paints across the runway numbers).
+            var stripePts = ribbon
+            if tw.id == "A1" {
+                stripePts = tw.points.map { pt in
+                    let st = frame.station(pt)
+                    if abs(st.y) < holdBarP { return frame.point(s: st.x, p: holdBarP) }
+                    return pt
+                }
+            }
+            let stripe = worldRibbonGeometry(points: stripePts, width: 0.35,
                                              lift: stripeLift, airport: airport,
                                              vPerMeter: 1.0, material: WorldMat.stripeYellow)
             container.addChildNode(SCNNode(geometry: stripe))
+
+            // D16 — double yellow edge lines.
+            for side in [-1.0, 1.0] {
+                for inset in [0.35, 0.75] {
+                    let offset = side * (tw.width / 2 - inset)
+                    let edgePts = offsetPolyline(ribbon, by: offset)
+                    let line = worldRibbonGeometry(points: edgePts, width: 0.14,
+                                                   lift: stripeLift, airport: airport,
+                                                   vPerMeter: 1.0, material: WorldMat.stripeYellow)
+                    container.addChildNode(SCNNode(geometry: line))
+                }
+            }
         }
         let flat = container.flattenedClone()
         flat.name = "taxiways"
         return flat
     }
 
-    // MARK: - Apron
-
-    /// Apron rect in runway-frame coordinates (shared with GroundDetails so
-    /// buildings hug its edges).
-    static let apronS0 = 408.0, apronSLen = 174.0
-    static let apronP0 = 72.0, apronPLen = 106.0
-
-    private static func apronNode(airport: AirportLayout, frame: FieldFrame) -> SCNNode {
-        var spots: [(s: Double, p: Double)] = []
-        for spot in airport.apronSpots {
-            let st = frame.station(spot.position)
-            spots.append((st.x, st.y))
+    private static func offsetPolyline(_ points: [V2], by offset: Double) -> [V2] {
+        guard points.count >= 2 else { return points }
+        var out: [V2] = []
+        for (i, p) in points.enumerated() {
+            let a = points[max(0, i - 1)], b = points[min(points.count - 1, i + 1)]
+            let d = simd_normalize(b - a)
+            out.append(p + V2(-d.y, d.x) * offset)
         }
-        // The VIP pad = center spot of the deeper row (largest p).
-        let vip = spots.max { a, b in
-            (a.p, -abs(a.s - (apronS0 + apronSLen / 2))) < (b.p, -abs(b.s - (apronS0 + apronSLen / 2)))
-        }
-        let image = WorldTex.apron(s0: apronS0, sLen: apronSLen, p0: apronP0, pLen: apronPLen,
-                                   spots: spots, vipSpot: vip)
-        let material = WorldMat.pbr(image, roughness: 0.82)
-        material.diffuse.wrapS = .clamp
-        material.diffuse.wrapT = .clamp
+        return out
+    }
 
+    // MARK: - Ramp (paved) + dirt tiedown infield (A8)
+
+    private static func groundGrid(frame: FieldFrame, airport: AirportLayout,
+                                   s0: Double, sLen: Double, p0: Double, pLen: Double,
+                                   lift: Double, cols: Int, rows: Int,
+                                   material: SCNMaterial) -> SCNGeometry {
         var mesh = WorldMesh()
         let up = SIMD3<Float>(0, 1, 0)
-        let cols = 12, rows = 8
         var grid: [[Int32]] = []
         for r in 0...rows {
             var rowIdx: [Int32] = []
-            let p = apronP0 + apronPLen * Double(r) / Double(rows)
+            let p = p0 + pLen * Double(r) / Double(rows)
             for c in 0...cols {
-                let s = apronS0 + apronSLen * Double(c) / Double(cols)
+                let s = s0 + sLen * Double(c) / Double(cols)
                 let world = frame.point(s: s, p: p)
-                let y = airport.groundHeight(at: world) + pavementLift
+                let y = airport.groundHeight(at: world) + lift
                 rowIdx.append(mesh.add(worldF3(world, y), up,
                                        SIMD2(Float(Double(c) / Double(cols)),
                                              Float(Double(r) / Double(rows)))))
@@ -124,9 +157,71 @@ enum WorldAirportBuilder {
                           desiredNormal: up)
             }
         }
-        let node = SCNNode(geometry: mesh.build(material: material))
+        return mesh.build(material: material)
+    }
+
+    private static func apronNode(airport: AirportLayout, frame: FieldFrame) -> SCNNode {
+        // Paved transient spots only (dirt rows live on the infield).
+        var paved: [(s: Double, p: Double)] = []
+        for spot in airport.apronSpots {
+            let st = frame.station(spot.position)
+            if st.y >= pavedSpotMinP { paved.append((st.x, st.y)) }
+        }
+        let image = WorldTex.apron(s0: apronS0, sLen: apronSLen,
+                                   p0: apronP0, pLen: apronPLen, spots: paved)
+        let material = WorldMat.pbr(image, roughness: 0.82)
+        material.diffuse.wrapS = .clamp
+        material.diffuse.wrapT = .clamp
+        let node = SCNNode(geometry: groundGrid(frame: frame, airport: airport,
+                                                s0: apronS0, sLen: apronSLen,
+                                                p0: apronP0, pLen: apronPLen,
+                                                lift: pavementLift, cols: 14, rows: 5,
+                                                material: material))
         node.name = "apron"
         return node
+    }
+
+    private static func infieldNode(airport: AirportLayout, frame: FieldFrame) -> SCNNode {
+        var dirtSpots: [(s: Double, p: Double)] = []
+        var rowPs: Set<Int> = []
+        for spot in airport.apronSpots {
+            let st = frame.station(spot.position)
+            if st.y < pavedSpotMinP {
+                dirtSpots.append((st.x, st.y))
+                rowPs.insert(Int(st.y.rounded()))
+            }
+        }
+        let image = WorldTex.dirtInfield(s0: infieldS0, sLen: infieldSLen,
+                                         p0: infieldP0, pLen: infieldPLen,
+                                         rowPs: rowPs.sorted().map(Double.init),
+                                         spots: dirtSpots)
+        let material = WorldMat.pbr(image, roughness: 0.96)
+        material.diffuse.wrapS = .clamp
+        material.diffuse.wrapT = .clamp
+        let node = SCNNode(geometry: groundGrid(frame: frame, airport: airport,
+                                                s0: infieldS0, sLen: infieldSLen,
+                                                p0: infieldP0, pLen: infieldPLen,
+                                                lift: 0.03, cols: 12, rows: 3,
+                                                material: material))
+        node.name = "dirtInfield"
+        return node
+    }
+
+    // MARK: - DC-3 fuel pit covers (A8 — flush steel discs by the terminal)
+
+    private static func fuelPitNode(airport: AirportLayout, frame: FieldFrame) -> SCNNode {
+        let container = SCNNode()
+        for s in [576.0, 590.0, 604.0] {
+            let world = frame.point(s: s, p: 141)
+            let y = airport.groundHeight(at: world)
+            let disc = SCNNode(geometry: SCNCylinder(radius: 0.6, height: 0.05))
+            disc.geometry?.materials = [WorldMat.fuelPitSteel]
+            disc.position = worldV3(world, y + pavementLift + 0.035)
+            container.addChildNode(disc)
+        }
+        let flat = container.flattenedClone()
+        flat.name = "fuelPits"
+        return flat
     }
 
     // MARK: - Hold-short bar (stub A1)
@@ -164,16 +259,16 @@ enum WorldAirportBuilder {
         return node
     }
 
-    // MARK: - Dirt service road
+    // MARK: - Dirt service road (D19 — winds SE from the ramp toward the rim)
 
     private static func serviceRoadNode(airport: AirportLayout, frame: FieldFrame) -> SCNNode {
         let waypoints: [(Double, Double)] = [
-            (582, 108), (640, 132), (700, 158), (790, 186), (880, 202), (952, 208),
+            (618, 128), (660, 168), (712, 224), (748, 268), (772, 296),
         ]
         let points = waypoints.map { frame.point(s: $0.0, p: $0.1) }
-        let geometry = worldRibbonGeometry(points: points, width: 4.2, lift: 0.03,
+        let geometry = worldRibbonGeometry(points: points, width: 4.6, lift: 0.03,
                                            airport: airport, vPerMeter: 1.0 / 9.0,
-                                           material: WorldMat.dirt, step: 18)
+                                           material: WorldMat.dirt, step: 14)
         let node = SCNNode(geometry: geometry)
         node.name = "serviceRoad"
         return node

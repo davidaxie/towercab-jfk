@@ -15,10 +15,10 @@ import simd
 // (colors, shader uniforms, env image) is bucketed so no visible stepping
 // occurs but the hot path stays allocation-light.
 //
-// The dome sits INSIDE fogStartDistance (radius 2.15 km around the static cab)
-// with depth writes off and renderingOrder -1000, so scene fog never eats the
-// sky; distant ocean/terrain instead fog out toward the dome's horizon band,
-// which is driven from the same palette — a seamless painted horizon.
+// The dome sits INSIDE fogStartDistance (radius 1.35 km around the static cab,
+// fog starts at 1.4 km) with depth writes off and renderingOrder -1000, so
+// scene fog never eats the sky; distant ocean/terrain instead fog out toward
+// the dome's horizon color itself (D8) — a seamless painted horizon.
 // =============================================================================
 
 final class GoldenHourSky: SkyDirector {
@@ -48,7 +48,6 @@ final class GoldenHourSky: SkyDirector {
         var ambientColor: SIMD3<Double>
         var ambientIntensity: Double
         var fillIntensity: Double
-        var fog: SIMD3<Double>
         var fogEnd: Double
         var discGain: Double
         var haloGain: Double
@@ -66,7 +65,6 @@ final class GoldenHourSky: SkyDirector {
                             ambientColor: m(a.ambientColor, b.ambientColor),
                             ambientIntensity: s(a.ambientIntensity, b.ambientIntensity),
                             fillIntensity: s(a.fillIntensity, b.fillIntensity),
-                            fog: m(a.fog, b.fog),
                             fogEnd: s(a.fogEnd, b.fogEnd),
                             discGain: s(a.discGain, b.discGain),
                             haloGain: s(a.haloGain, b.haloGain),
@@ -76,32 +74,36 @@ final class GoldenHourSky: SkyDirector {
     }
 
     // Golden hour → orange-rose sunset → violet dusk.
+    // D6: 17:30 is genuinely GOLDEN (warm mid, warmer ambient, hotter sun).
+    // D9: aerial haze doubled — fogEnd 18 km day → 14 km dusk (start 1.4 km).
+    // D10: dusk ambient floor lifted (never crushed): 18.45 → 430, 18.80 → 380,
+    //      fill floor 100.
     private let keyHours: [Double] = [17.30, 17.90, 18.17, 18.45, 18.80]
     private let keyStates: [SkyState] = [
-        SkyState(sunColor: SIMD3(1.00, 0.86, 0.62), sunIntensity: 1600,
-                 horizon: SIMD3(1.02, 0.80, 0.54), mid: SIMD3(0.66, 0.60, 0.62), zenith: SIMD3(0.28, 0.42, 0.66),
-                 ambientColor: SIMD3(0.58, 0.63, 0.80), ambientIntensity: 440, fillIntensity: 170,
-                 fog: SIMD3(0.93, 0.77, 0.58), fogEnd: 32_000,
-                 discGain: 1.9, haloGain: 0.60, haloPow: 30, envIntensity: 1.15),
+        SkyState(sunColor: SIMD3(1.00, 0.82, 0.55), sunIntensity: 1750,
+                 horizon: SIMD3(1.02, 0.80, 0.54), mid: SIMD3(0.72, 0.62, 0.55), zenith: SIMD3(0.34, 0.46, 0.68),
+                 ambientColor: SIMD3(0.66, 0.64, 0.74), ambientIntensity: 400, fillIntensity: 170,
+                 fogEnd: 18_000,
+                 discGain: 1.25, haloGain: 0.60, haloPow: 30, envIntensity: 1.15),
         SkyState(sunColor: SIMD3(1.00, 0.68, 0.42), sunIntensity: 1250,
                  horizon: SIMD3(1.05, 0.68, 0.42), mid: SIMD3(0.74, 0.52, 0.52), zenith: SIMD3(0.22, 0.31, 0.57),
-                 ambientColor: SIMD3(0.58, 0.60, 0.80), ambientIntensity: 420, fillIntensity: 150,
-                 fog: SIMD3(0.94, 0.70, 0.52), fogEnd: 30_000,
-                 discGain: 1.7, haloGain: 0.72, haloPow: 22, envIntensity: 1.05),
+                 ambientColor: SIMD3(0.62, 0.60, 0.78), ambientIntensity: 420, fillIntensity: 150,
+                 fogEnd: 17_000,
+                 discGain: 1.20, haloGain: 0.72, haloPow: 22, envIntensity: 1.05),
         SkyState(sunColor: SIMD3(1.00, 0.50, 0.30), sunIntensity: 620,
                  horizon: SIMD3(1.02, 0.55, 0.38), mid: SIMD3(0.68, 0.40, 0.52), zenith: SIMD3(0.16, 0.20, 0.46),
-                 ambientColor: SIMD3(0.56, 0.55, 0.79), ambientIntensity: 390, fillIntensity: 120,
-                 fog: SIMD3(0.88, 0.58, 0.48), fogEnd: 27_000,
-                 discGain: 1.3, haloGain: 0.85, haloPow: 16, envIntensity: 0.92),
+                 ambientColor: SIMD3(0.58, 0.55, 0.77), ambientIntensity: 400, fillIntensity: 125,
+                 fogEnd: 16_000,
+                 discGain: 1.10, haloGain: 0.85, haloPow: 16, envIntensity: 0.92),
         SkyState(sunColor: SIMD3(1.00, 0.44, 0.36), sunIntensity: 90,
                  horizon: SIMD3(0.78, 0.42, 0.46), mid: SIMD3(0.44, 0.30, 0.48), zenith: SIMD3(0.11, 0.13, 0.34),
-                 ambientColor: SIMD3(0.53, 0.51, 0.78), ambientIntensity: 330, fillIntensity: 80,
-                 fog: SIMD3(0.66, 0.46, 0.50), fogEnd: 23_000,
+                 ambientColor: SIMD3(0.60, 0.52, 0.72), ambientIntensity: 430, fillIntensity: 110,
+                 fogEnd: 15_000,
                  discGain: 0.0, haloGain: 0.55, haloPow: 12, envIntensity: 0.74),
         SkyState(sunColor: SIMD3(1.00, 0.42, 0.38), sunIntensity: 0,
-                 horizon: SIMD3(0.55, 0.34, 0.44), mid: SIMD3(0.30, 0.24, 0.42), zenith: SIMD3(0.07, 0.08, 0.24),
-                 ambientColor: SIMD3(0.50, 0.49, 0.78), ambientIntensity: 290, fillIntensity: 55,
-                 fog: SIMD3(0.48, 0.37, 0.47), fogEnd: 20_000,
+                 horizon: SIMD3(0.55, 0.34, 0.44), mid: SIMD3(0.30, 0.24, 0.42), zenith: SIMD3(0.10, 0.11, 0.28),
+                 ambientColor: SIMD3(0.58, 0.52, 0.74), ambientIntensity: 380, fillIntensity: 100,
+                 fogEnd: 14_000,
                  discGain: 0.0, haloGain: 0.30, haloPow: 10, envIntensity: 0.60),
     ]
 
@@ -111,8 +113,8 @@ final class GoldenHourSky: SkyDirector {
         self.scene = scene
         self.bank = bank
 
-        // --- Sky dome ---
-        let dome = SCNSphere(radius: 2150)
+        // --- Sky dome (inside fogStart 1400 so fog never eats the sky) ---
+        let dome = SCNSphere(radius: 1350)
         dome.segmentCount = 48
         let mat = SCNMaterial()
         mat.lightingModel = .constant
@@ -166,9 +168,9 @@ final class GoldenHourSky: SkyDirector {
         ambientNode.light = ambientLight
         scene.rootNode.addChildNode(ambientNode)
 
-        // --- Fog: warm, exaggerated ~2× physical for painterly depth ---
-        scene.fogStartDistance = 4200
-        scene.fogEndDistance = 32_000
+        // --- Fog: warm, exaggerated ~2× physical for painterly depth (D9) ---
+        scene.fogStartDistance = 1400
+        scene.fogEndDistance = 18_000
         scene.fogDensityExponent = 1.0
         scene.background.contents = worldColor(0.18, 0.14, 0.20)
 
@@ -215,7 +217,8 @@ final class GoldenHourSky: SkyDirector {
             lastColorBucket = colorBucket
             sunLight.color = color(state.sunColor)
             ambientLight.color = color(state.ambientColor)
-            scene.fogColor = color(state.fog * 0.97)
+            // D8: fog IS the dome horizon color — a seamless painted horizon.
+            scene.fogColor = color(state.horizon)
             setDome("skyHorizon", state.horizon)
             setDome("skyMid", state.mid)
             setDome("skyZenith", state.zenith)
@@ -247,7 +250,8 @@ final class GoldenHourSky: SkyDirector {
         camera.zFar = 60_000
         camera.wantsHDR = true
         camera.wantsExposureAdaptation = false
-        camera.exposureOffset = -0.22
+        camera.exposureOffset = -0.12       // D6: lift out of the grey
+
         camera.averageGray = 0.18
         camera.whitePoint = 1.05
         camera.bloomThreshold = 1.35   // whites must not glow — bloom is for lights and sun
@@ -257,10 +261,10 @@ final class GoldenHourSky: SkyDirector {
         camera.screenSpaceAmbientOcclusionRadius = 4
         camera.vignettingPower = 1.0
         camera.vignettingIntensity = 0.55
-        camera.colorFringeStrength = 0.7
-        camera.colorFringeIntensity = 0.35
-        camera.saturation = 1.06
-        camera.contrast = 0.05
+        camera.colorFringeStrength = 0.35   // D34: halved — keep texture edges crisp
+        camera.colorFringeIntensity = 0.18
+        camera.saturation = 1.12            // D6: golden, not milky
+        camera.contrast = 0.09
         camera.grainIntensity = 0.07
         camera.grainScale = 1.6
         camera.grainIsColored = false
@@ -301,8 +305,11 @@ final class GoldenHourSky: SkyDirector {
     float c = clamp(dot(dir, sunDirWorld), 0.0, 1.0);
     float halo = pow(c, haloPow) * haloGain;
     float wide = pow(c, 5.0) * 0.13;
-    float disc = smoothstep(sunDiscCos - 0.00040, sunDiscCos + 0.00040, c) * discGain;
-    float3 col = sky + sunTint * (halo + wide + disc);
+    // D7: soft limb (±0.004 in cos space) + a mid-halo so the disc glows
+    // into the sky instead of punching a white hole.
+    float midHalo = pow(c, 200.0) * 0.8;
+    float disc = smoothstep(sunDiscCos - 0.004, sunDiscCos + 0.004, c) * discGain;
+    float3 col = sky + sunTint * (halo + wide + midHalo + disc);
     _output.color = float4(col, 1.0);
     """
 

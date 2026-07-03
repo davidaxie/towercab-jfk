@@ -213,7 +213,7 @@ public enum FlightPhase: Equatable, Codable {
 
 // MARK: - Commands (PRD §2.2 P0 verbs in slice scope)
 
-public enum Command: Equatable, Codable {
+public enum Command: Equatable, Hashable, Codable {
     case clearedToLand
     case goAround
     case extendDownwind
@@ -346,9 +346,13 @@ public enum RadioSpeaker: Equatable, Codable {
 public struct RadioCall: Equatable, Codable {
     public let speaker: RadioSpeaker
     public let text: String
-    public init(speaker: RadioSpeaker, text: String) {
+    /// Display label resolved at emit time ("TWR" or the callsign) so the log
+    /// can render calls from aircraft that have already despawned.
+    public let speakerLabel: String
+    public init(speaker: RadioSpeaker, text: String, speakerLabel: String = "") {
         self.speaker = speaker
         self.text = text
+        self.speakerLabel = speakerLabel
     }
 }
 

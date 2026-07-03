@@ -49,9 +49,19 @@ struct RadioVoice {
     mutating func towerContinue(_ c: Callsign) -> String {
         pick(["\(c.spoken), continue taxi.", "\(c.spoken), continue."])
     }
-    mutating func towerExpedite(_ c: Callsign) -> String {
-        pick(["\(c.spoken), expedite, first right at Alpha Two, no delay.",
-              "\(c.spoken), keep your speed up, exit right at Alpha Two."])
+    mutating func towerExpedite(_ c: Callsign, exitName: String?) -> String {
+        // B15 — name the exit this type can actually make, or stay generic.
+        if let e = exitName {
+            return pick(["\(c.spoken), expedite, right at \(e), no delay.",
+                         "\(c.spoken), keep your speed up, exit right at \(e)."])
+        }
+        return pick(["\(c.spoken), expedite, first available right, no delay.",
+                     "\(c.spoken), keep your speed up, first available right."])
+    }
+    /// B25 — the tower answers a ready-to-taxi call with an actual clearance.
+    mutating func towerTaxiClearance(_ c: Callsign, via: String) -> String {
+        pick(["\(c.spoken), runway two-two, taxi via \(via), hold short.",
+              "\(c.spoken), taxi to runway two-two via \(via), hold short."])
     }
     mutating func towerHandoffDeparture(_ c: Callsign) -> String {
         pick(["\(c.spoken), contact SoCal departure. Good day.",
@@ -116,10 +126,36 @@ struct RadioVoice {
     mutating func pilotBackOnFinal(_ c: Callsign) -> String {
         "\(c.spoken), back with you on final."
     }
+    /// B19 — phase-aware orbit exit for pattern legs.
+    mutating func pilotBackOnDownwind(_ c: Callsign) -> String {
+        pick(["\(c.spoken), back on the downwind.",
+              "\(c.spoken), three-sixty complete, downwind."])
+    }
+    /// B18 — go-around issued on the downwind reads back as a rejoin.
+    mutating func readbackPatternGoAround(_ c: Callsign) -> String {
+        pick(["Coming around for the downwind, \(c.spoken).",
+              "Breaking off, we'll rejoin the downwind, \(c.spoken)."])
+    }
+    /// B3 — departure refuses a takeoff clearance onto an occupied runway.
+    mutating func pilotUnableTakeoff(_ c: Callsign) -> String {
+        pick(["\(c.spoken), unable, traffic on the runway.",
+              "Negative, \(c.spoken), there's traffic on the runway."])
+    }
+    /// B3 — departure aborts the roll when the runway fills in front of it.
+    mutating func pilotAbortTakeoff(_ c: Callsign) -> String {
+        "\(c.spoken), aborting, traffic on the runway!"
+    }
+    /// Cleared traffic squeezed by the runway — firm but not an emergency.
+    mutating func pilotTrafficGoAround(_ c: Callsign) -> String {
+        pick(["\(c.spoken), going around, that gap's not there.",
+              "\(c.spoken) is going around, runway's still occupied."])
+    }
     mutating func pilotClearOfRunway(_ c: Callsign) -> String {
         pick(["\(c.spoken), clear of two-two.", "\(c.spoken) is clear, taxiing in."])
     }
     mutating func pilotAirborne(_ c: Callsign) -> String {
-        pick(["\(c.spoken), on the go.", "\(c.spoken) is rolling out over the cliffs."])
+        // B30 — departure phraseology (no "rolling out" on a climb-out).
+        pick(["\(c.spoken), on the go.",
+              "\(c.spoken), airborne, climbing on runway heading."])
     }
 }

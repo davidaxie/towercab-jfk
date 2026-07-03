@@ -4,15 +4,33 @@ import simd
 // =============================================================================
 // KAVX — Catalina "Airport in the Sky" (PRD §4.1, airport #1)
 //
-// A 3,000 ft runway on a mesa 1,602 ft above the Pacific, cliffs off both
-// thresholds, a midfield hump that hides the far end from the cab. Real-world
-// Catalina is non-towered; per the PRD we install a fictional cab and say so.
+// Researched layout (AUDIT.md §A, FAA/Conservancy-sourced):
+//   A1  Runway 4/22 true heading 055/235.
+//   A2  914.4 × 22.9 m (3,000 × 75 ft), concrete.
+//   A4  The signature gradient: crest 213 m from the 4 (SW) threshold; the SW
+//       threshold sits ~1.5 m below the crest, the NE (22) threshold ~14.7 m
+//       below — a ~2.1% upslope landing 22. y = 0 is the CREST datum; the
+//       Pacific stays at y = -mesaDropMeters.
+//   A7  Ramp/tower on the TRUE southeast side; pattern is flown NW over the
+//       water. GAME CALL (noted creative liberty, like the tower itself): the
+//       real parallel taxiway is partial (midfield ramp → SW end only), which
+//       would force back-taxi departures; we keep it full-length to the NE
+//       hold-short so departures flow. The midfield ramp stub is real.
+//   A8  SE midfield ramp fronting the terminal, with a dirt tiedown infield
+//       between the ramp pavement and the taxiway (the authentic Catalina
+//       look). No fuel island — just disused DC-3 fuel pits in the pavement.
+//   A11 Mesa built by leveling two hilltops and filling the canyon between:
+//       groundHeight carries two gentle knolls near the runway ends, offset
+//       from the centerline; cliffs drop off both runway ends.
+//
+// Real-world Catalina is non-towered; per the PRD we install a fictional
+// standalone cab (SE, behind the parallel near the terminal cluster) and say so.
 //
 // Stylized single source of truth for BOTH sim and 3D scene, so art and sim
 // can never disagree about geometry (PRD §9). World convention: see SimTypes.
 // Runway 4/22. Active in the slice: RUNWAY 22 (land/depart toward the SW).
 // Approach comes in over the channel from the NE; departures climb out over
-// the SW cliffs. Tower + apron sit on the SE side, midfield.
+// the SW cliffs.
 // =============================================================================
 
 public struct Taxiway {
@@ -98,111 +116,168 @@ public struct AirportLayout {
     public let baseTurnStation: Double
 
     // --- The place itself ---
-    /// The Pacific sits this far below the runway (1,602 ft mesa).
+    /// The Pacific sits this far below the runway crest (1,602 ft mesa).
     public let mesaDropMeters: Double
     /// Rough mesa-top footprint (closed polygon) for terrain building.
     public let mesaOutline: [V2]
-    /// Midfield hump amplitude — the PRD's "blind far end" mechanic, presentation-real.
+    /// Max crest-to-threshold relief of the real gradient (A4). Kept for API
+    /// stability; the actual profile lives in groundHeight.
     public let humpAmplitude: Double
     /// Tower cab camera eye, world coords (fictional cab, SE midfield).
     public let towerCabEye: V3
     public let windsockPosition: V2
 
-    /// Mesa-top ground height (the midfield hump). Both the sim's ground
-    /// vehicles/aircraft and the world mesh sample this — never disagree.
+    // A4 — the real KAVX longitudinal profile, crest = y 0 (datum).
+    // Asymmetric piecewise grade with parabolic crest blends (C1-smooth):
+    //   NE (22) side: ~2.2% grade, threshold B at -14.7 m
+    //   SW (4) side:  ~0.87% grade, threshold A at -1.5 m
+    static let crestStationFrom22 = 914.4 - 213.0          // 701.4 m from B
+    static let crestBlendHalf = 80.0                       // rounded crest span
+    static let gradeNE = 14.7 / (crestStationFrom22 - crestBlendHalf / 2)
+    static let gradeSW = 1.5 / (213.0 - crestBlendHalf / 2)
+
+    static func runwayProfile(atStation s: Double) -> Double {
+        let x = crestStationFrom22 - s          // >0 on the NE side of the crest
+        let b = crestBlendHalf
+        if x >= 0 {
+            if x <= b { return -(gradeNE / (2 * b)) * x * x }
+            return -(gradeNE * b / 2 + gradeNE * (x - b))
+        } else {
+            let xa = -x
+            if xa <= b { return -(gradeSW / (2 * b)) * xa * xa }
+            return -(gradeSW * b / 2 + gradeSW * (xa - b))
+        }
+    }
+
+    // A11 — the two filled knolls (station-from-22, lateral-SE, height, radius).
+    // Offset from the centerline, clear of all pavement and taxi routes.
+    static let knolls: [(s: Double, p: Double, h: Double, r: Double)] = [
+        (130.0, -160.0, 10.0, 110.0),      // NE-end knoll, pattern (NW) side
+        (800.0, 195.0, 9.0, 110.0),        // SW-end knoll, tower (SE) side
+    ]
+
+    /// Mesa-top ground height. Both the sim's ground vehicles/aircraft and the
+    /// world mesh sample this — never disagree. The runway profile extends
+    /// laterally across the graded airfield; the knolls rise off to the sides.
     public func groundHeight(at p: V2) -> Double {
         let toPoint = p - runway.thresholdB
-        let s = simd_dot(toPoint, runway.dir22)
-        let t = max(0, min(1, s / runway.length))
-        return humpAmplitude * sin(.pi * t)
+        let d = runway.dir22
+        let s = simd_dot(toPoint, d)
+        let lat = simd_dot(toPoint, V2(d.y, -d.x))         // + toward the SE
+        let sClamped = max(0, min(runway.length, s))
+        var y = AirportLayout.runwayProfile(atStation: sClamped)
+        for k in AirportLayout.knolls {
+            let ds = s - k.s, dp = lat - k.p
+            let dist = (ds * ds + dp * dp).squareRoot()
+            if dist < k.r {
+                y += k.h * (0.5 + 0.5 * cos(.pi * dist / k.r))
+            }
+        }
+        return y
     }
 
     // MARK: - KAVX
 
     public static let kavx: AirportLayout = {
-        // Runway 4/22 — 990 m (3,250 ft) × 18 m, midpoint at origin, true heading 222°.
-        let h22 = degToRad(222)
+        // A1/A2 — Runway 4/22: 914.4 m × 22.9 m, midpoint at origin,
+        // TRUE heading 235 flying runway 22 (mag 221, var 12E).
+        let h22 = degToRad(235)
         let dir = headingDirection(h22)                    // toward the SW
-        let half = 495.0
+        let half = 914.4 / 2
         let thresholdB = V2(0, 0) - dir * half             // NE end (RWY 22 threshold)
         let thresholdA = V2(0, 0) + dir * half             // SW end
-        let runway = Runway(thresholdA: thresholdA, thresholdB: thresholdB, width: 18)
+        let runway = Runway(thresholdA: thresholdA, thresholdB: thresholdB, width: 22.9)
 
-        // Perpendicular unit vectors.
-        let perpSE = V2(-dir.y, dir.x)                     // right of the 22 roll — tower side
-        let perpNW = -perpSE                               // over-the-water side (pattern)
+        // Perpendicular unit vectors. A7: TRUE southeast (audit fix — the old
+        // build's perp pointed compass-NW, mirroring the field).
+        let perpSE = V2(dir.y, -dir.x)                     // right of the 22 roll — tower side
+        // (pattern/downwind side = -perpSE, the NW over-the-water side)
+        /// Runway-frame helper: s along the 22 roll from threshold B, p toward SE.
+        func at(_ s: Double, _ p: Double) -> V2 { thresholdB + dir * s + perpSE * p }
 
-        // Parallel taxiway Alpha, 55 m SE of centerline, full length + stubs.
+        // Parallel taxiway Alpha, 55 m SE of centerline (see GAME CALL above:
+        // full-length vs the real partial parallel), + stubs.
         let alphaOffset = 55.0
-        let alphaB = thresholdB + perpSE * alphaOffset     // NE end of Alpha
-        let alphaA = thresholdA + perpSE * alphaOffset     // SW end of Alpha
-        let taxiwayAlpha = Taxiway(id: "A", name: "Alpha", points: [alphaB, alphaA], width: 10)
+        let taxiwayAlpha = Taxiway(id: "A", name: "Alpha",
+                                   points: [at(6, alphaOffset), at(886, alphaOffset)], width: 10)
 
-        // Stubs: A1 at NE end (departure entry), A2 midfield exit, A3 SW-end exit.
-        let a2Station = 560.0                              // comfortable Lark rollout
-        let a3Station = 940.0
+        // Stubs: A1 at the NE end (departure entry), A2 midfield ramp stub
+        // (extends SE past Alpha into the ramp — the real perpendicular stub),
+        // A3 SW-end exit.
+        let a2Station = 550.0                              // comfortable Lark rollout
+        let a3Station = 880.0                              // beyond the crest — the long roll
         let a1 = Taxiway(id: "A1", name: "Alpha One",
-                         points: [thresholdB + dir * 10, alphaB + dir * 10], width: 10)
+                         points: [at(10, 0), at(10, alphaOffset)], width: 10)
         let a2 = Taxiway(id: "A2", name: "Alpha Two",
-                         points: [runway.point(atStationFrom22: a2Station),
-                                  runway.point(atStationFrom22: a2Station) + perpSE * alphaOffset],
-                         width: 10)
+                         points: [at(a2Station, 0), at(a2Station, 98)], width: 10)
         let a3 = Taxiway(id: "A3", name: "Alpha Three",
-                         points: [runway.point(atStationFrom22: a3Station),
-                                  runway.point(atStationFrom22: a3Station) + perpSE * alphaOffset],
-                         width: 10)
+                         points: [at(a3Station, 0), at(a3Station, alphaOffset)], width: 10)
 
         let exits = [
             RunwayExit(stationFrom22: a2Station, taxiwayID: "A2", isPreferred: true),
             RunwayExit(stationFrom22: a3Station, taxiwayID: "A3", isPreferred: false),
         ]
 
-        // Apron SE of Alpha, midfield: two tiedown rows + a VIP pad.
-        let apronCenter = V2(0, 0) + perpSE * 110
+        // A8 — parking: two tiedown rows on the dirt infield (p 62…94, between
+        // Alpha and the ramp pavement) + three paved transient spots on the
+        // ramp. Dirt spots park nose into the prevailing 240 wind; paved spots
+        // face the field.
         var spots: [ApronSpot] = []
-        for i in 0..<5 {
-            let along = Double(i - 2) * 22.0
-            spots.append(ApronSpot(position: apronCenter + dir * along + perpSE * 14,
-                                   heading: h22 + .pi / 2))
+        for s in [450.0, 470.0, 490.0, 510.0] {            // dirt row 1
+            spots.append(ApronSpot(position: at(s, 73), heading: h22))
         }
-        for i in 0..<3 {
-            let along = Double(i - 1) * 26.0
-            spots.append(ApronSpot(position: apronCenter + dir * along + perpSE * 44,
-                                   heading: h22 - .pi / 2))
+        for s in [460.0, 480.0, 500.0] {                   // dirt row 2
+            spots.append(ApronSpot(position: at(s, 87), heading: h22))
+        }
+        for s in [455.0, 480.0, 505.0] {                   // paved transient row
+            spots.append(ApronSpot(position: at(s, 112), heading: h22 + .pi / 2))
         }
 
-        // Ground routes.
-        let apronExitPoint = apronCenter + perpNW * 30     // where apron meets Alpha side
-        let holdShort = alphaB + dir * 10 - (alphaB - thresholdB) * (28.0 / alphaOffset)
-        // (28 m from the runway edge along stub A1)
+        // Ground routes. Hold-short bar 28.6 m off the centerline on stub A1.
+        let apronExitPoint = at(a2Station, 98)             // ramp mouth of the A2 stub
+        let holdShort = at(10, 40)
         let routeTaxiOut: [V2] = [apronExitPoint,
-                                  apronExitPoint + perpNW * 25,   // join Alpha
-                                  alphaB + dir * 10,               // NE along Alpha
+                                  at(a2Station, alphaOffset),   // join Alpha
+                                  at(10, alphaOffset),           // NE along Alpha
                                   holdShort]
-        let a2Runway = runway.point(atStationFrom22: a2Station)
-        let a2Alpha = a2Runway + perpSE * alphaOffset
-        let routeExitMidfield: [V2] = [a2Runway, a2Alpha, apronExitPoint + perpNW * 25, apronExitPoint]
-        let a3Runway = runway.point(atStationFrom22: a3Station)
-        let a3Alpha = a3Runway + perpSE * alphaOffset
-        let routeExitEnd: [V2] = [a3Runway, a3Alpha, apronExitPoint + perpNW * 25, apronExitPoint]
+        let routeExitMidfield: [V2] = [at(a2Station, 0), at(a2Station, alphaOffset), apronExitPoint]
+        let routeExitEnd: [V2] = [at(a3Station, 0), at(a3Station, alphaOffset),
+                                  at(a2Station, alphaOffset), apronExitPoint]
         let routeLineUp: [V2] = [holdShort, thresholdB + dir * 30]
 
-        // Mesa footprint — asymmetric rounded blob hugging runway + apron,
-        // cliffs everywhere beyond it. (World agent may refine artistically;
-        // the sim only uses groundHeight.)
+        // A11/D4 — mesa footprint: fBm-jittered outline (96 points, ±10%
+        // radial noise), two coves, one promontory near the 22 threshold.
+        // Cliffs everywhere beyond it, off both runway ends.
         var outline: [V2] = []
-        let n = 24
+        let n = 96
         for i in 0..<n {
             let a = Double(i) / Double(n) * 2 * .pi
-            let alongR = 780.0 + 90 * sin(a * 3 + 0.7)
-            let crossR = 300.0 + 60 * cos(a * 2 + 1.9)
-            let p = dir * (cos(a) * alongR) + perpSE * (sin(a) * crossR + 60)
-            outline.append(p)
+            var radial = 1.0 + 0.10 * (0.5 * sin(3 * a + 1.7)
+                                       + 0.3 * sin(7 * a + 0.4)
+                                       + 0.2 * sin(13 * a + 3.1))
+            radial -= 0.22 * exp(-pow(angleDelta(from: a, to: 2.2) / 0.18, 2))   // cove SE
+            radial -= 0.18 * exp(-pow(angleDelta(from: a, to: 5.2) / 0.22, 2))   // cove NW
+            radial += 0.30 * exp(-pow(angleDelta(from: a, to: 3.49) / 0.16, 2))  // promontory nr 22 thr
+            let along = 640.0 * radial
+            let cross = 362.0 * radial
+            outline.append(dir * (cos(a) * along) + perpSE * (sin(a) * cross + 55))
         }
 
-        // Fictional cab: SE midfield at the apron's edge, eye ~15 m over the ramp.
-        let cabGround = V2(0, 0) + perpSE * 78 - dir * 55
-        let cabEye = V3(cabGround.x, 15.5, cabGround.y)
+        // Fictional cab: SE, behind the parallel near the terminal cluster,
+        // eye 15.5 m above local ground (knolls are far; profile is exact here).
+        //
+        // A4 payoff note (verified by the geometry harness): with the TRUE
+        // profile (crest +0, thr B −14.7, thr A −1.5) no tower-height eye can
+        // be crest-blind to a runway threshold — blocking the 2 m point over
+        // thr B needs an eye below ~+0.5 m absolute, and blocking thr A is
+        // impossible since +0.5 m over A sits ABOVE the crest. The real KAVX
+        // blind-end is pilot-to-pilot: a 2 m eye at A cannot see a 2 m eye at
+        // B (min clearance −2.95 m at station 649 — reproduced exactly by
+        // groundHeight). The drama the cab DOES get is the true 14.7 m
+        // amphitheater upslope: arrivals touch down far below and climb the
+        // concrete toward the crest.
+        let cabGround = at(645, 168)
+        let cabEyeY = AirportLayout.runwayProfile(atStation: 645) + 15.5
 
         return AirportLayout(
             icao: "KAVX",
@@ -222,11 +297,11 @@ public struct AirportLayout {
             finalGlideSlopeDeg: 3.3,
             downwindEntryStation: 1400,
             baseTurnStation: -900,
-            mesaDropMeters: 488,
+            mesaDropMeters: 488.3,
             mesaOutline: outline,
-            humpAmplitude: 3.0,
-            towerCabEye: cabEye,
-            windsockPosition: V2(0, 0) + perpSE * 40 - dir * 180
+            humpAmplitude: 14.7,
+            towerCabEye: V3(cabGround.x, cabEyeY, cabGround.y),
+            windsockPosition: at(400, 84)                  // D23: SE, near the ramp
         )
     }()
 

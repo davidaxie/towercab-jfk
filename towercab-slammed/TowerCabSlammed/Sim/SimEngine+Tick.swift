@@ -7,6 +7,13 @@ import simd
 //   conflict projection → deferred radio → shift end.
 // All iteration over aircraft is in AircraftID order; all randomness comes
 // from SeededRNG streams. Same seed ⇒ identical run.
+//
+// Audit fairness pass (see AUDIT.md §B): the conflict model now watches every
+// committed arrival against every occupant AND every arrival ahead of it (B2),
+// projects departures onto occupied runways (B3), gives taxiing aircraft a
+// queue so they never overlap (B4), computes honest runway-clear times from
+// distance-to-exit (B5), softens and de-dupes the self-preservation penalty
+// (B6), and tells the truth on the strip phase ladder (B12).
 // =============================================================================
 
 extension SimEngine {
@@ -24,35 +31,55 @@ extension SimEngine {
         static let exitSpeed = 7.0               // runway turnoff speed, m/s
         static let thresholdCrossAGL = 15.0
         static let commitDistance = 500.0        // uncleared inside this → pilot GA
+        static let shortFinalDistance = 600.0    // B12 — truthful SHORT FINAL
+        static let flareDistance = 130.0         // B12 — flare begins here…
+        static let flareAGL = 22.0               // …or at this height, whichever first
         static let nagAfter = 45.0
         static let nagRepeat = 40.0
         static let preRollPauseSeconds = 3.0
-        static let departHandoffDistance = 3500.0
-        static let departHandoffAltitude = 350.0
+        static let departHandoffDistance = 1800.0 // B14 — strips clear the rail sooner
+        static let departHandoffAltitude = 250.0
         static let goAroundPenalty = 250
-        static let selfPreservationPenalty = 2000
+        static let selfPreservationPenalty = 600  // B6 — was 2000; never nukes a shift
         static let tightGapWindow = 90.0
         static let noDelayWindow = 25.0
         static let forceEndGrace = 150.0
+        static let groundQueueGap = 28.0          // B4 — taxi queue spacing, m
+        static let taxiLaneOffset = 3.5           // B4 — keep-right taxi lane, m
+        static let downwindStagger = 350.0        // rejoin spacing on the leg, m
     }
 
     // MARK: Geometry sugar
 
     private var rw: Runway { airport.runway }
-    private var perpSE: V2 { V2(-rw.dir22.y, rw.dir22.x) }
-    private var perpNW: V2 { -perpSE }
+
+    /// Unit perpendicular pointing to the tower/apron side of the runway.
+    /// Derived from the cab position so the pattern is always flown on the far
+    /// (over-water) side regardless of the layout's compass handedness (B-flip).
+    private var perpTower: V2 {
+        let p = V2(rw.dir22.y, -rw.dir22.x)
+        let toCab = V2(airport.towerCabEye.x, airport.towerCabEye.z) - rw.thresholdB
+        return simd_dot(toCab, p) >= 0 ? p : -p
+    }
+    /// Pattern (downwind) side — opposite the tower, over the water.
+    private var perpPattern: V2 { -perpTower }
     private var gsRad: Double { degToRad(airport.finalGlideSlopeDeg) }
+    /// Ground elevation of the RWY 22 threshold (≈ −14.7 m below the crest).
+    private var thrGroundY: Double { groundY(rw.thresholdB) }
 
     /// Signed distance along the runway axis from threshold 22 (+ = toward SW).
     private func station(of p: V2) -> Double { simd_dot(p - rw.thresholdB, rw.dir22) }
-    /// Lateral offset from centerline (+ = SE/tower side).
-    private func cross(of p: V2) -> Double { simd_dot(p - rw.thresholdB, perpSE) }
-    /// Glideslope altitude at a given distance-to-threshold.
+    /// Lateral offset from centerline (+ = tower side).
+    private func cross(of p: V2) -> Double { simd_dot(p - rw.thresholdB, perpTower) }
+    /// Glideslope altitude at a distance-to-threshold, referenced to the
+    /// threshold's ground elevation (B: threshold is no longer the y=0 datum).
     private func glideAlt(_ dist: Double) -> Double {
-        Tune.thresholdCrossAGL + max(0, dist) * tan(gsRad)
+        thrGroundY + Tune.thresholdCrossAGL + max(0, dist) * tan(gsRad)
     }
+    /// Pattern altitude as an absolute (the crest datum ≈ field elevation).
+    private var patternAbsAlt: Double { airport.patternAltitude }
     private func downwindPoint(station s: Double) -> V2 {
-        rw.point(atStationFrom22: s) + perpNW * airport.downwindOffset
+        rw.point(atStationFrom22: s) + perpPattern * airport.downwindOffset
     }
     private func turnRate(_ ac: Aircraft) -> Double {
         ac.kind == .comet60 ? Tune.cometTurnRate : Tune.patternTurnRate
@@ -85,7 +112,14 @@ extension SimEngine {
                     aircraft: aircraft.filter { $0.phase != .removed }.map { $0.snapshotState() },
                     score: scoreboard.score, streakMultiplier: scoreboard.streakMultiplier,
                     shiftPhase: shiftPhase,
-                    shiftTimeRemaining: max(0, script.duration - simTime), wind: wind)
+                    // B22 — may go negative; the HUD renders it as +m:ss overtime.
+                    shiftTimeRemaining: script.duration - simTime, wind: wind)
+    }
+
+    /// Count of strips that occupy a rail slot: everything except the resolved
+    /// (parked / departed) ones, which are just waiting to be flicked (B11).
+    private var activeStripCount: Int {
+        aircraft.reduce(0) { $0 + ($1.phase == .removed || $1.isResolved ? 0 : 1) }
     }
 
     // MARK: - Shift phase & spawning
@@ -102,25 +136,43 @@ extension SimEngine {
     }
 
     private func processSpawns(_ now: Double) {
-        // The traffic curve stops authoring movements 60 s before shift end;
-        // strip-cap deferrals past that point are abandoned, not backlogged.
+        // The traffic curve stops authoring 60 s before shift end; deferrals
+        // past that point are abandoned, not backlogged.
         if now > ShiftScript.lastSpawnTime + 10 {
             spawnCursor = script.orders.count
             return
         }
         while spawnCursor < script.orders.count, script.orders[spawnCursor].time <= now {
-            guard aircraft.count < Tune.maxActiveStrips,
-                  now - lastSpawnAt >= Tune.minSpawnSeparation                // no deferral bursts
-            else { return }                                                   // retry next tick
-            let order = script.orders[spawnCursor]
+            guard activeStripCount < Tune.maxActiveStrips,           // B11 — parked strips don't block
+                  now - lastSpawnAt >= Tune.minSpawnSeparation
+            else { return }
+
+            // B11 — head-of-line leapfrog: if the next order is a departure with
+            // no free apron spot, let a spawnable arrival within the next few
+            // orders go first rather than stalling the whole queue.
+            var index = spawnCursor
+            if !script.orders[index].isArrival && freeApronSpot() == nil {
+                if let a = (spawnCursor..<min(spawnCursor + 3, script.orders.count))
+                    .first(where: { script.orders[$0].isArrival && script.orders[$0].time <= now }) {
+                    index = a
+                } else {
+                    return   // nothing spawnable yet; try next tick
+                }
+            }
+
+            let order = script.orders[index]
             if order.isArrival {
                 spawnArrival(order)
             } else {
-                guard let spot = freeApronSpot() else { return }          // defer until a spot opens
+                guard let spot = freeApronSpot() else { return }
                 spawnDeparture(order, spot: spot)
             }
+            // B11 — par accrues only for orders that actually spawn.
+            spawnedParMovements += 1
+            spawnedParScore += Int((order.isArrival ? 250.0 : 200.0) * order.kind.movementWeight)
             lastSpawnAt = now
-            spawnCursor += 1
+            if index == spawnCursor { spawnCursor += 1 }
+            else { script.orders.remove(at: index) }   // leapfrogged order consumed
         }
     }
 
@@ -155,8 +207,10 @@ extension SimEngine {
             ac.heading = rw.heading22
             ac.phase = .inboundFinal
         } else {
-            ac.pos2 = downwindPoint(station: airport.downwindEntryStation)
-            ac.altitude = airport.patternAltitude
+            // Spawn behind any traffic already in the pattern so a fresh
+            // arrival never materializes on top of a rejoining go-around.
+            ac.pos2 = downwindPoint(station: freeDownwindEntryStation(excluding: id))
+            ac.altitude = patternAbsAlt
             ac.heading = rw.heading04
             ac.phase = .downwind
         }
@@ -208,6 +262,7 @@ extension SimEngine {
         switch command {
         case .clearedToLand:
             ac.clearedToLand = true
+            if ac.committedAt < 0 { ac.committedAt = now }   // B8
             towerSay(radio.towerClearedToLand(ac.callsign), readback: command, ac: ac, now: now)
 
         case .goAround:
@@ -231,16 +286,28 @@ extension SimEngine {
             towerSay(radio.towerOrbit(ac.callsign, left: left), readback: command, ac: ac, now: now)
 
         case .lineUpAndWait:
+            // B3 — refuse onto a runway a landing hasn't cleared yet.
+            if runwayHasLandingOccupant() {
+                pilotSay(ac, radio.pilotUnableTakeoff(ac.callsign))
+                return
+            }
             ac.phase = .lineUpWait
             ac.route = lineUpRoute()
             ac.routeIndex = 0
             ac.lineupComplete = false
+            ac.lastCommitAt = now                            // B8
             resetWait(ac)
             towerSay(radio.towerLineUp(ac.callsign), readback: command, ac: ac, now: now)
 
         case .clearedForTakeoff(let immediate):
+            // B3 — refuse onto an occupied runway.
+            if runwayHasLandingOccupant() {
+                pilotSay(ac, radio.pilotUnableTakeoff(ac.callsign))
+                return
+            }
             ac.clearedForTakeoff = true
             ac.immediateTakeoff = immediate
+            ac.lastCommitAt = now                            // B8
             armTightGap(ac, now: now)
             if ac.phase == .holdingShort {
                 ac.route = lineUpRoute()
@@ -276,7 +343,8 @@ extension SimEngine {
         case .expediteExit:
             ac.expedited = true
             if ac.phase == .rollout { chooseExit(ac) }
-            towerSay(radio.towerExpedite(ac.callsign), readback: command, ac: ac, now: now)
+            towerSay(radio.towerExpedite(ac.callsign, exitName: ac.exitTaxiwayName),
+                     readback: command, ac: ac, now: now)
 
         case .handoff:
             scoreboard.award(base: 50)
@@ -288,8 +356,6 @@ extension SimEngine {
     }
 
     private func lineUpRoute() -> [V2] {
-        // Extend the authored line-up route with an along-runway point so the
-        // aircraft finishes naturally aligned with the 22 heading.
         var r = airport.routeLineUp
         if let last = r.last { r.append(last + rw.dir22 * 24) }
         return r
@@ -306,13 +372,17 @@ extension SimEngine {
     // MARK: - Radio plumbing
 
     private func towerSay(_ text: String, readback: Command, ac: Aircraft, now: Double) {
-        eventQueue.append(.radio(RadioCall(speaker: .tower, text: text)))
+        // B17 — resolve display labels at emit time; the aircraft may despawn
+        // before its readback is due (handoff).
+        eventQueue.append(.radio(RadioCall(speaker: .tower, text: text, speakerLabel: "TWR")))
         let reply = radio.readback(ac.callsign, for: readback)
-        delayedRadio.append((now + 0.7, RadioCall(speaker: .pilot(ac.id), text: reply)))
+        delayedRadio.append((now + 0.7,
+            RadioCall(speaker: .pilot(ac.id), text: reply, speakerLabel: ac.callsign.display)))
     }
 
     private func pilotSay(_ ac: Aircraft, _ text: String) {
-        eventQueue.append(.radio(RadioCall(speaker: .pilot(ac.id), text: text)))
+        eventQueue.append(.radio(RadioCall(speaker: .pilot(ac.id), text: text,
+                                           speakerLabel: ac.callsign.display)))
     }
 
     private func flushDelayedRadio(_ now: Double) {
@@ -348,6 +418,10 @@ extension SimEngine {
         case .startingUp:
             if ac.phaseTime >= 4 {
                 pilotSay(ac, radio.pilotReadyToTaxi(ac.callsign))
+                // B25 — the tower answers with an actual taxi clearance.
+                let via = airport.taxiways.first?.name ?? "Alpha"
+                eventQueue.append(.radio(RadioCall(speaker: .tower,
+                    text: radio.towerTaxiClearance(ac.callsign, via: via), speakerLabel: "TWR")))
                 var r = airport.routeTaxiOut
                 r.insert(ac.pos2, at: 0)
                 ac.route = r
@@ -374,21 +448,17 @@ extension SimEngine {
     private func updateApproach(_ ac: Aircraft, dt: Double, now: Double) {
         let d = -station(of: ac.pos2)   // distance to threshold, m
 
-        // Phase ladder by distance.
+        // Phase ladder by distance (B12 — truthful FINAL → SHORT FINAL).
         if ac.phase == .inboundFinal && d <= 3500 { ac.phase = .finalApproach }
-        if (ac.phase == .finalApproach || ac.phase == .inboundFinal) && d <= 1200 {
+        if (ac.phase == .finalApproach || ac.phase == .inboundFinal) && d <= Tune.shortFinalDistance {
             ac.phase = .shortFinal
+            if ac.committedAt < 0 { ac.committedAt = now }   // committed by proximity
         }
-        ac.urgency = ac.phase == .shortFinal ? (1 - max(0, d) / 1200) : nil
+        ac.urgency = ac.phase == .shortFinal ? (1 - max(0, d) / Tune.shortFinalDistance) : nil
 
         // Frequency neglect: no clearance inside the commit distance.
         if d <= Tune.commitDistance && !ac.clearedToLand {
             pilotForcedGoAround(ac, penalty: Tune.goAroundPenalty, selfPreservation: false)
-            return
-        }
-        if d <= 0 {
-            ac.phase = .flare
-            ac.urgency = nil
             return
         }
 
@@ -401,8 +471,17 @@ extension SimEngine {
         // Lateral: pursue a point on the centerline just ahead.
         let aim = rw.point(atStationFrom22: -(d - Tune.approachLookahead))
         ac.steer(toPoint: aim, maxRate: turnRate(ac), dt: dt)
-
         driveGlide(ac, targetAlt: glideAlt(d), dt: dt)
+
+        // B12/B20 — enter the flare at a truthful point and keep integrating
+        // this tick (no one-frame freeze at the most-watched moment).
+        let agl = ac.altitude - groundY(ac.pos2)
+        if ac.clearedToLand && (d <= Tune.flareDistance || agl <= Tune.flareAGL) {
+            ac.phase = .flare
+            ac.urgency = nil
+            updateFlare(ac, dt: dt, now: now)
+            return
+        }
         ac.integrate(dt: dt)
     }
 
@@ -427,8 +506,8 @@ extension SimEngine {
         }
         ac.driveSpeed(toward: ac.kind.patternSpeed, accel: 1.2, decel: 1.0, dt: dt)
         ac.steer(toPoint: downwindPoint(station: s - 320), maxRate: turnRate(ac), dt: dt)
-        let pathDist = (s - airport.baseTurnStation) + airport.downwindOffset - airport.baseTurnStation
-        driveGlide(ac, targetAlt: min(airport.patternAltitude, glideAlt(pathDist)), dt: dt, gentle: true)
+        // B7 — hold pattern altitude on the downwind; the descent lives on base.
+        driveGlide(ac, targetAlt: patternAbsAlt, dt: dt, gentle: true)
         ac.integrate(dt: dt)
     }
 
@@ -438,32 +517,56 @@ extension SimEngine {
         ac.steer(toPoint: intercept, maxRate: turnRate(ac), dt: dt)
         let lateral = abs(cross(of: ac.pos2))
         let pathDist = lateral - airport.baseTurnStation
-        driveGlide(ac, targetAlt: min(airport.patternAltitude, glideAlt(pathDist)), dt: dt, gentle: true)
+        driveGlide(ac, targetAlt: min(patternAbsAlt, glideAlt(pathDist)), dt: dt, gentle: true)
         ac.integrate(dt: dt)
         if lateral < 150 { ac.phase = .finalApproach }
     }
 
     private func updateOrbit(_ ac: Aircraft, dt: Double) {
-        let rate = (2 * .pi / 45.0) * (ac.orbitLeft ? -1.0 : 1.0)
+        // B19 — orbit at the type's real turn rate (was a fixed 45 s that
+        // implied a 49° bank on the Comet).
+        let rate = turnRate(ac) * (ac.orbitLeft ? -1.0 : 1.0)
         ac.heading += rate * dt
         ac.orbitRemaining -= abs(rate * dt)
         let targetBank = atan((abs(rate) * max(ac.speed, 20)) / 9.81) * (ac.orbitLeft ? -1 : 1)
-        ac.bank += (max(-0.45, min(0.45, targetBank)) - ac.bank) * min(1, dt * 4)
+        ac.bank += (max(-0.6, min(0.6, targetBank)) - ac.bank) * min(1, dt * 4)
         ac.driveSpeed(toward: ac.kind.patternSpeed, accel: 1.0, decel: 0.8, dt: dt)
         ac.verticalSpeed += (0 - ac.verticalSpeed) * min(1, dt * 2)
         ac.integrate(dt: dt)
         if ac.orbitRemaining <= 0 {
-            ac.phase = ac.resumePhase == .orbiting ? .finalApproach : ac.resumePhase
-            if !ac.straightIn && ac.phase == .downwind { /* rejoin handled by downwind */ }
-            else { pilotSay(ac, radio.pilotBackOnFinal(ac.callsign)) }
+            let resume = ac.resumePhase == .orbiting ? .finalApproach : ac.resumePhase
+            ac.phase = resume
+            // B19 — phase-aware resume phrase.
+            switch resume {
+            case .downwind: pilotSay(ac, radio.pilotBackOnDownwind(ac.callsign))
+            default: pilotSay(ac, radio.pilotBackOnFinal(ac.callsign))
+            }
         }
     }
 
     private func beginGoAround(_ ac: Aircraft) {
         ac.phase = .goingAround
         ac.clearedToLand = false
+        ac.committedAt = -100
         ac.urgency = nil
+        // B18 — a go-around commanded from the pattern rejoins the downwind
+        // directly instead of flying an aimless 180° back to runway heading.
+        ac.gaFromPattern = [.downwind, .base, .orbiting].contains(ac.resumePhase)
+            || [.downwind, .base].contains(ac.phase)
+        // Stagger the rejoin behind existing pattern traffic so two go-arounds
+        // never stack on the entry point.
+        ac.rejoinEntryStation = freeDownwindEntryStation(excluding: ac.id)
         conflicts.clear(involving: ac.id)
+    }
+
+    /// A downwind entry station clear of current pattern traffic — pushed back
+    /// (higher station) once per aircraft already flying the pattern.
+    private func freeDownwindEntryStation(excluding id: AircraftID) -> Double {
+        let inPattern = aircraft.filter {
+            $0.id != id && [.downwind, .goingAround, .orbiting].contains($0.phase)
+        }.count
+        return airport.downwindEntryStation + Tune.downwindStagger * Double(inPattern)
+            + Double(id.raw % 3) * 130
     }
 
     private func pilotForcedGoAround(_ ac: Aircraft, penalty: Int, selfPreservation: Bool) {
@@ -473,6 +576,7 @@ extension SimEngine {
         ac.goAroundCount += 1
         ac.delaySeconds += 60
         if selfPreservation {
+            scoreboard.selfPreservations += 1
             eventQueue.append(.selfPreservation(aircraft: ac.id, penalty: penalty))
             pilotSay(ac, radio.pilotEmergencyGoAround(ac.callsign))
         } else {
@@ -483,20 +587,31 @@ extension SimEngine {
 
     private func updateGoAround(_ ac: Aircraft, dt: Double) {
         ac.driveSpeed(toward: ac.kind.patternSpeed, accel: 1.6, decel: 0.8, dt: dt)
-        let s = station(of: ac.pos2)
-        let climbing = ac.altitude < airport.patternAltitude - 5
+        let climbing = ac.altitude < patternAbsAlt - 5
         let desiredVS = climbing ? ac.kind.climbRate : 0
         ac.verticalSpeed += (desiredVS - ac.verticalSpeed) * min(1, dt * 1.8)
         ac.pitch += (atan2(ac.verticalSpeed, max(ac.speed, 20)) - ac.pitch) * min(1, dt * 3)
 
-        let entry = downwindPoint(station: airport.downwindEntryStation)
-        if s < 650 || ac.altitude < airport.patternAltitude * 0.55 {
+        let entryStation = ac.rejoinEntryStation.isNaN
+            ? airport.downwindEntryStation : ac.rejoinEntryStation
+        let entry = downwindPoint(station: entryStation)
+        let s = station(of: ac.pos2)
+        if ac.gaFromPattern {
+            // Straight to the (staggered) downwind entry — a tidy rejoin.
+            ac.steer(toPoint: entry, maxRate: turnRate(ac), dt: dt)
+            if simd_length(entry - ac.pos2) < 300 {
+                ac.phase = .downwind
+                ac.rejoinEntryStation = .nan
+                pilotSay(ac, radio.pilotBackOnDownwind(ac.callsign))
+            }
+        } else if s < 650 || ac.altitude < patternAbsAlt * 0.55 {
             ac.steer(toward: rw.heading22, maxRate: turnRate(ac), dt: dt)      // straight ahead
         } else {
             ac.steer(toPoint: entry, maxRate: turnRate(ac), dt: dt)            // crosswind → downwind
-            if simd_length(entry - ac.pos2) < 260 {
+            if simd_length(entry - ac.pos2) < 300 {
                 ac.phase = .downwind
-                pilotSay(ac, "\(ac.callsign.spoken), back on the downwind.")
+                ac.rejoinEntryStation = .nan
+                pilotSay(ac, radio.pilotBackOnDownwind(ac.callsign))
             }
         }
         ac.integrate(dt: dt)
@@ -505,7 +620,7 @@ extension SimEngine {
     private func updateFlare(_ ac: Aircraft, dt: Double, now: Double) {
         let s = station(of: ac.pos2)
         let remaining = ac.touchdownStation - s
-        let groundH = groundY(rw.point(atStationFrom22: ac.touchdownStation))
+        let groundH = groundY(rw.point(atStationFrom22: max(s, ac.touchdownStation)))
         ac.driveSpeed(toward: ac.kind.approachSpeed * 0.95, accel: 0.5, decel: 1.0, dt: dt)
         let ttd = max(0.4, remaining / max(ac.speed, 10))
         let desiredVS = max(-4.0, min(0, -(ac.altitude - groundH) / ttd))
@@ -513,10 +628,13 @@ extension SimEngine {
         ac.pitch += (0.07 - ac.pitch) * min(1, dt * 2.5)   // nose-up in the flare
         ac.steer(toPoint: rw.point(atStationFrom22: s + 120), maxRate: 0.2, dt: dt)
         ac.integrate(dt: dt)
-        if ac.altitude <= groundH + 0.15 || s >= ac.touchdownStation {
+        ac.altitude = max(ac.altitude, groundY(ac.pos2))
+        if ac.altitude <= groundY(ac.pos2) + 0.15 || s >= ac.touchdownStation {
             ac.altitude = groundY(ac.pos2)
             ac.verticalSpeed = 0
             ac.phase = .rollout
+            // B24 — the landing counts at touchdown, not at the turnoff.
+            completeMovement(ac, isLanding: true)
             chooseExit(ac)
             consumeExpedite(now: now, by: ac.id)
         }
@@ -528,15 +646,17 @@ extension SimEngine {
         let needed = (v * v - Tune.exitSpeed * Tune.exitSpeed) / (2 * decel)
         let reach = station(of: ac.pos2) + needed
         let exits = airport.exits.sorted { $0.stationFrom22 < $1.stationFrom22 }
-        var chosen = exits.last!
-        if ac.expedited, let preferred = exits.first(where: { $0.isPreferred }),
-           preferred.stationFrom22 >= reach - 8 {
-            chosen = preferred
-        } else if let first = exits.first(where: { $0.stationFrom22 >= reach - 5 }) {
-            chosen = first
-        }
-        ac.exitStation = chosen.stationFrom22
-        ac.exitIsPreferred = chosen.isPreferred
+        // Earliest exit this type could physically make (the honest SLICK EXIT).
+        let earliest = exits.first(where: { $0.stationFrom22 >= reach - 8 }) ?? exits.last!
+        ac.exitStation = earliest.stationFrom22
+        ac.exitIsPreferred = earliest.isPreferred
+        ac.exitIsEarliestReachable = (earliest.stationFrom22 == exits.first(where: {
+            $0.stationFrom22 >= reach - 8 })?.stationFrom22)
+        ac.exitTaxiwayName = taxiwayName(for: earliest)
+    }
+
+    private func taxiwayName(for exit: RunwayExit) -> String {
+        airport.taxiways.first(where: { $0.id == exit.taxiwayID })?.name ?? exit.taxiwayID
     }
 
     private func updateRollout(_ ac: Aircraft, dt: Double, now: Double) {
@@ -544,14 +664,11 @@ extension SimEngine {
         let remaining = ac.exitStation - s
         let base = ac.expedited ? ac.kind.expediteDecel : ac.kind.rolloutDecel
         if ac.speed > Tune.exitSpeed {
-            // Follow the profile that reaches exit speed exactly at the turnoff:
-            // roll fast, minimum runway occupancy. Cap at hard braking.
             let required = (ac.speed * ac.speed - Tune.exitSpeed * Tune.exitSpeed)
                 / (2 * max(remaining, 2))
             let a = min(required * 1.06, ac.kind.expediteDecel * 1.3)
             ac.speed = max(Tune.exitSpeed, ac.speed - a * dt)
         } else if remaining > 6 {
-            // Braked early (recomputed exit): keep it moving to the turnoff.
             ac.driveSpeed(toward: Tune.exitSpeed * 1.3, accel: base * 0.5, decel: base, dt: dt)
         }
         ac.pitch += (0 - ac.pitch) * min(1, dt * 2)
@@ -566,12 +683,12 @@ extension SimEngine {
     }
 
     private func beginTaxiIn(_ ac: Aircraft, now: Double) {
-        // The landing movement banks at turnoff (PRD: touchdown-complete).
-        completeMovement(ac, isLanding: true)
-        if ac.expedited && ac.exitIsPreferred {
+        // B15 — SLICK EXIT only when the expedite actually bought the earliest
+        // reachable turnoff for THIS type (the Comet can't make Alpha Two).
+        if ac.expedited && ac.exitIsEarliestReachable && ac.exitIsPreferred {
             ac.expeditedHonored = true
             awardBadge(.slickExit, to: ac,
-                       note: "SLICK EXIT — \(ac.callsign.display) off at Alpha Two")
+                       note: "SLICK EXIT — \(ac.callsign.display) off at \(ac.exitTaxiwayName ?? "the high-speed")")
             lastExpedite = (now, ac.id)
         }
         var route = ac.exitIsPreferred ? airport.routeExitMidfield : airport.routeExitEnd
@@ -579,8 +696,11 @@ extension SimEngine {
             ac.apronSpot = spot
             route.append(airport.apronSpots[spot].position)
         } else {
+            // B21 — overflow arrivals fan out instead of stacking on one point.
             ac.apronSpot = -1
-            route.append(route.last! + perpSE * 12)
+            ac.overflowIndex = overflowCount
+            overflowCount += 1
+            route.append(route.last! + perpTower * 12 + rw.dir22 * (14 * Double(ac.overflowIndex)))
         }
         ac.route = route
         ac.routeIndex = 0
@@ -590,15 +710,17 @@ extension SimEngine {
 
     private func updateTaxiIn(_ ac: Aircraft, dt: Double, now: Double) {
         ac.altitude = groundY(ac.pos2)
-        if ac.holdingPosition {
+        if ac.holdingPosition || groundBlocked(ac, arrivalsOnly: true) {   // B4
             ac.driveSpeed(toward: 0, accel: 0, decel: 2.2, dt: dt)
             ac.integrate(dt: dt)
-            accrueWait(ac, dt: dt, now: now)
+            if ac.holdingPosition { accrueWait(ac, dt: dt, now: now) }
+            ac.altitude = groundY(ac.pos2)
             return
         }
         if ac.phase == .exitingRunway && ac.routeIndex >= 1 { ac.phase = .taxiToApron }
         let spd = ac.kind.taxiSpeed * (ac.expedited && ac.phase == .exitingRunway ? 1.25 : 1.0)
-        if ac.followRoute(speed: spd, accel: 1.0, turnRate: Tune.taxiTurnRate, dt: dt) {
+        if ac.followRoute(speed: spd, accel: 1.0, turnRate: Tune.taxiTurnRate,
+                            laneOffset: taxiLane(for: ac), dt: dt) {
             ac.phase = .parkedArrival
             ac.landingLightsOn = false
             ac.urgency = nil
@@ -611,13 +733,17 @@ extension SimEngine {
 
     private func updateTaxiOut(_ ac: Aircraft, dt: Double, now: Double) {
         ac.altitude = groundY(ac.pos2)
-        if ac.holdingPosition {
+        // B4 — departures yield to everyone ahead (arrivals clearing have
+        // priority; a queue forms naturally at the hold-short line).
+        if ac.holdingPosition || groundBlocked(ac, arrivalsOnly: false) {
             ac.driveSpeed(toward: 0, accel: 0, decel: 2.2, dt: dt)
             ac.integrate(dt: dt)
-            accrueWait(ac, dt: dt, now: now)
+            if ac.holdingPosition { accrueWait(ac, dt: dt, now: now) }
+            ac.altitude = groundY(ac.pos2)
             return
         }
-        if ac.followRoute(speed: ac.kind.taxiSpeed, accel: 0.9, turnRate: Tune.taxiTurnRate, dt: dt) {
+        if ac.followRoute(speed: ac.kind.taxiSpeed, accel: 0.9, turnRate: Tune.taxiTurnRate,
+                            laneOffset: taxiLane(for: ac), dt: dt) {
             ac.phase = .holdingShort
             resetWait(ac)
             pilotSay(ac, radio.pilotHoldingShort(ac.callsign))
@@ -642,7 +768,6 @@ extension SimEngine {
             ac.altitude = groundY(ac.pos2)
             return
         }
-        // Sitting on the runway: urgency climbs, pilot gets antsy.
         ac.urgency = min(1, ac.waitSeconds / 30)
         accrueWait(ac, dt: dt, now: now)
     }
@@ -661,6 +786,16 @@ extension SimEngine {
         if ac.preRollPause > 0 {
             ac.preRollPause = max(0, ac.preRollPause - dt)
             if ac.preRollPause > 0 { return }
+        }
+        // B3 — abort if a landing rolls out ahead before we can rotate.
+        if ac.speed < ac.kind.rotateSpeed * 0.85 && landingAhead(of: ac) {
+            pilotSay(ac, radio.pilotAbortTakeoff(ac.callsign))
+            ac.clearedForTakeoff = false
+            ac.immediateTakeoff = false
+            ac.speed = min(ac.speed, Tune.exitSpeed)
+            ac.phase = .lineUpWait
+            ac.lineupComplete = true
+            return
         }
         ac.urgency = nil
         ac.speed += ac.kind.takeoffAccel * dt
@@ -691,12 +826,12 @@ extension SimEngine {
         ac.steer(toward: rw.heading22, maxRate: 0.1, dt: dt)
         ac.pitch += (0.14 - ac.pitch) * min(1, dt * 2)
         ac.integrate(dt: dt)
-        if ac.kind.hasRetractableGear && ac.gearDown && ac.altitude >= 30 {
+        if ac.kind.hasRetractableGear && ac.gearDown && (ac.altitude - thrGroundY) >= 30 {
             ac.gearDown = false
         }
         if ac.phase == .climbingOut {
             let dist = simd_length(ac.pos2 - rw.thresholdB)
-            if dist >= Tune.departHandoffDistance || ac.altitude >= Tune.departHandoffAltitude {
+            if dist >= Tune.departHandoffDistance || (ac.altitude - thrGroundY) >= Tune.departHandoffAltitude {
                 ac.phase = .departedHandoff
                 ac.urgency = nil
             }
@@ -723,43 +858,136 @@ extension SimEngine {
         ac.urgency = nil
     }
 
-    // MARK: - Conflict projection
+    // MARK: - Ground separation (B4)
 
-    /// Nearest committed arrival: cleared to land, or inside short final.
-    private func committedArrival() -> (ac: Aircraft, timeToThreshold: Double)? {
-        var best: (Aircraft, Double)? = nil
-        for ac in aircraft {
-            switch ac.phase {
-            case .inboundFinal, .finalApproach, .shortFinal:
-                guard ac.clearedToLand || ac.phase == .shortFinal else { continue }
-                let d = -station(of: ac.pos2)
-                guard d > 0 else { continue }
-                let ta = d / max(ac.speed, 10)
-                if best == nil || ta < best!.1 { best = (ac, ta) }
+    /// True when `o` has right of way over `ac`: arrivals clearing the runway
+    /// outrank departures; within the same class a lower id wins. A strict
+    /// total order, so mutual yielding can never deadlock.
+    private func outranks(_ o: Aircraft, _ ac: Aircraft) -> Bool {
+        if o.isArrival != ac.isArrival { return o.isArrival }
+        return o.id.raw < ac.id.raw
+    }
+
+    /// Keep-right taxi lane, widened to a veer-around arc when another ground
+    /// aircraft sits close ahead — so a moving aircraft steers around a stopped
+    /// one at the shared apron throat instead of tracking straight through it.
+    private func taxiLane(for ac: Aircraft) -> Double {
+        let fwd = headingDirection(ac.heading)
+        for o in aircraft where o.id != ac.id {
+            switch o.phase {
+            case .taxiToRunway, .taxiToApron, .exitingRunway, .holdingShort,
+                 .lineUpWait, .startingUp:
+                let rel = o.pos2 - ac.pos2
+                let dist = simd_length(rel)
+                if dist > 0.1, dist < 16, simd_dot(simd_normalize(rel), fwd) > 0.2 {
+                    return 9.0   // arc right, around it
+                }
+            default: continue
+            }
+        }
+        return Tune.taxiLaneOffset
+    }
+
+    /// Should this taxiing aircraft hold for another ground aircraft? Two
+    /// guards: a forward-cone queue (follow at a gap) and a short-range
+    /// side guard that yields to a higher-priority neighbour merging in — the
+    /// two together stop both rear-end stacking and side-merge overlap (B4).
+    private func groundBlocked(_ ac: Aircraft, arrivalsOnly: Bool) -> Bool {
+        let fwd = headingDirection(ac.heading)
+        for o in aircraft where o.id != ac.id {
+            switch o.phase {
+            case .taxiToRunway, .taxiToApron, .exitingRunway, .holdingShort,
+                 .lineUpWait, .startingUp:
+                let rel = o.pos2 - ac.pos2
+                let dist = simd_length(rel)
+                guard dist > 0.1 else { continue }
+                let ahead = simd_dot(simd_normalize(rel), fwd) > 0.5
+                if ahead, dist < Tune.groundQueueGap {
+                    if !arrivalsOnly || o.isArrival { return true }   // forward queue
+                }
+                // Side/merge guard: never let a lower-priority aircraft overlap
+                // a higher-priority neighbour, from any direction.
+                if dist < 14, outranks(o, ac) { return true }
             default:
                 continue
             }
         }
-        return best.map { (ac: $0.0, timeToThreshold: $0.1) }
+        return false
     }
 
+    // MARK: - Conflict projection (B2 / B3 / B5)
+
+    /// Every committed arrival (cleared to land, or inside short final),
+    /// sorted nearest-threshold first. Ta uses a two-segment speed-bleed
+    /// estimate (B23) so a fast straight-in doesn't read artificially close.
+    private func committedArrivals() -> [(ac: Aircraft, ta: Double)] {
+        var out: [(Aircraft, Double)] = []
+        for ac in aircraft {
+            switch ac.phase {
+            case .inboundFinal, .finalApproach, .shortFinal, .flare:
+                guard ac.clearedToLand || ac.phase == .shortFinal || ac.phase == .flare else { continue }
+                let d = -station(of: ac.pos2)
+                guard d > -50 else { continue }
+                out.append((ac, timeToThreshold(ac, distance: d)))
+            default:
+                continue
+            }
+        }
+        return out.sorted { $0.1 < $1.1 }
+    }
+
+    /// B23 — integrate the pattern→Vref bleed instead of using instantaneous
+    /// speed, so ambers that will self-heal don't train players to ignore them.
+    private func timeToThreshold(_ ac: Aircraft, distance d: Double) -> Double {
+        guard d > 0 else { return 0 }
+        let vRef = ac.kind.approachSpeed
+        if d <= 300 { return d / max((ac.speed + vRef) / 2, 10) }
+        // Segment beyond 300 m bleeds from current speed toward Vref.
+        let far = d - 300
+        let vFar = (ac.speed + vRef) / 2
+        return far / max(vFar, 10) + 300 / max(vRef, 10)
+    }
+
+    /// Honest runway-clear time (B5) — from distance to the chosen/likely exit,
+    /// not a decel-to-zero fiction that overstated Vela occupancy by ~10 s.
     private func runwayClearTime(_ ac: Aircraft) -> Double? {
         switch ac.phase {
         case .flare:
             let ttd = max(0, ac.touchdownStation - station(of: ac.pos2)) / max(ac.speed, 10)
-            let decel = ac.expedited ? ac.kind.expediteDecel : ac.kind.rolloutDecel
-            let roll = max(0, ac.speed * 0.95 - Tune.exitSpeed) / decel
-            return ttd + roll + ConflictConstants.rolloutBuffer
+            return ttd + rolloutOccupancy(ac, fromStation: ac.touchdownStation)
         case .rollout:
-            let decel = ac.expedited ? ac.kind.expediteDecel : ac.kind.rolloutDecel
-            return max(0, ac.speed - Tune.exitSpeed) / decel + ConflictConstants.rolloutBuffer
+            return rolloutOccupancy(ac, fromStation: station(of: ac.pos2))
         case .lineUpWait:
-            return ConflictConstants.lineUpWaitNeed
+            return timeUntilAirborne(ac) + ConflictConstants.lineUpReaction   // B9
         case .takeoffRoll:
             return timeUntilAirborne(ac) + ConflictConstants.liftoffBuffer
         default:
             return nil
         }
+    }
+
+    /// Time from a runway station to clearing at the aircraft's exit.
+    private func rolloutOccupancy(_ ac: Aircraft, fromStation s: Double) -> Double {
+        let exitSt = ac.exitStation > 0 ? ac.exitStation : estimatedExitStation(ac)
+        let remaining = max(0, exitSt - s)
+        let avg = max((ac.speed + Tune.exitSpeed) / 2, Tune.exitSpeed)
+        return remaining / avg + ConflictConstants.rolloutBuffer
+    }
+
+    private func estimatedExitStation(_ ac: Aircraft) -> Double {
+        let decel = ac.kind.rolloutDecel
+        let v = ac.kind.approachSpeed * 0.95
+        let needed = (v * v - Tune.exitSpeed * Tune.exitSpeed) / (2 * decel)
+        let reach = ac.touchdownStation + needed
+        let exits = airport.exits.sorted { $0.stationFrom22 < $1.stationFrom22 }
+        return (exits.first(where: { $0.stationFrom22 >= reach - 8 }) ?? exits.last!).stationFrom22
+    }
+
+    /// Estimated seconds a landing arrival occupies the runway (threshold→exit),
+    /// used to project an arrival against the arrival ahead of it (B2).
+    private func landingOccupancy(_ arr: Aircraft) -> Double {
+        let toTouchdown = max(0, arr.touchdownStation) / max(arr.kind.approachSpeed * 0.9, 20)
+        return toTouchdown + rolloutOccupancy(arr, fromStation: arr.touchdownStation)
     }
 
     private func timeUntilAirborne(_ ac: Aircraft) -> Double {
@@ -779,6 +1007,46 @@ extension SimEngine {
         return t
     }
 
+    /// B3 — a landing is on (or about to be on) the runway ahead of a departure.
+    private func runwayHasLandingOccupant() -> Bool {
+        for ac in aircraft {
+            if ac.phase == .flare || ac.phase == .rollout {
+                if let tc = runwayClearTime(ac), tc > 2 { return true }
+            }
+        }
+        return false
+    }
+
+    /// B3 — a landing rolling out physically ahead of a rolling departure.
+    private func landingAhead(of dep: Aircraft) -> Bool {
+        let s = station(of: dep.pos2)
+        for ac in aircraft where ac.phase == .flare || ac.phase == .rollout {
+            if station(of: ac.pos2) > s + 20 { return true }
+        }
+        return false
+    }
+
+    /// B8 — a departure the player cleared onto the runway AFTER an arrival was
+    /// already committed is the player's own manufactured gap; it pays nothing.
+    private func isManufactured(arrival arr: Aircraft, occupant occ: Aircraft) -> Bool {
+        guard !occ.isArrival else { return false }
+        return occ.lastCommitAt >= 0 && occ.lastCommitAt > arr.committedAt
+    }
+
+    private func addProjection(_ proj: inout [ConflictProjection],
+                               arr: Aircraft, occ: Aircraft,
+                               margin: Double, ta: Double, manufactured: Bool) {
+        let band = ConflictTracker.band(forMargin: margin)
+        proj.append(ConflictProjection(arrival: arr.id, occupant: occ.id, margin: margin,
+                                       timeToThreshold: ta, band: band, manufactured: manufactured))
+        if band > .green {
+            for ac in [arr, occ] {
+                if band > ac.band { ac.band = band }
+                ac.gapSeconds = min(ac.gapSeconds ?? .infinity, margin)
+            }
+        }
+    }
+
     private func updateConflicts(_ now: Double) {
         var previousBands: [Int: ConflictBand] = [:]
         for ac in aircraft {
@@ -788,19 +1056,23 @@ extension SimEngine {
         }
 
         var projections: [ConflictProjection] = []
-        if let (arr, ta) = committedArrival() {
-            for occ in aircraft where occ.id != arr.id {
+        let arrivals = committedArrivals()
+        let occupants = aircraft.filter { runwayClearTime($0) != nil }
+                                .sorted { $0.id.raw < $1.id.raw }
+
+        // B2 — each arrival vs every runway occupant AND every arrival ahead.
+        for (i, entry) in arrivals.enumerated() {
+            let arr = entry.ac, ta = entry.ta
+            for occ in occupants where occ.id != arr.id {
                 guard let tc = runwayClearTime(occ) else { continue }
-                let m = ta - tc
-                let band = ConflictTracker.band(forMargin: m)
-                projections.append(ConflictProjection(arrival: arr.id, occupant: occ.id,
-                                                      margin: m, timeToThreshold: ta, band: band))
-                if band > .green {
-                    for ac in [arr, occ] {
-                        if band > ac.band { ac.band = band }
-                        ac.gapSeconds = min(ac.gapSeconds ?? .infinity, m)
-                    }
-                }
+                addProjection(&projections, arr: arr, occ: occ, margin: ta - tc, ta: ta,
+                              manufactured: isManufactured(arrival: arr, occupant: occ))
+            }
+            for j in 0..<i {
+                let ahead = arrivals[j].ac
+                let tcAhead = arrivals[j].ta + landingOccupancy(ahead)
+                addProjection(&projections, arr: arr, occ: ahead, margin: ta - tcAhead,
+                              ta: ta, manufactured: false)
             }
         }
 
@@ -814,12 +1086,22 @@ extension SimEngine {
             }
         }
 
-        // Pilot self-preservation: unresolved red, arrival about to cross.
+        // B6 — pilot self-preservation: unresolved red, arrival about to cross.
+        // Softened to −600, once per aircraft; if the pair had no meaningful
+        // warning it resolves as an ordinary go-around (no −600, no event), so
+        // the penalty only ever lands on demonstrated neglect.
         if let worst = projections.filter({ $0.band == .red }).min(by: { $0.margin < $1.margin }),
            worst.timeToThreshold < ConflictConstants.selfPreservationTa,
            let arr = aircraft.first(where: { $0.id == worst.arrival }),
-           arr.phase.isAirborne {
-            pilotForcedGoAround(arr, penalty: Tune.selfPreservationPenalty, selfPreservation: true)
+           arr.phase.isAirborne, !arr.selfPresFired {
+            arr.selfPresFired = true
+            let ep = conflicts.state(worst.arrival, worst.occupant)
+            let warned = ep?.amberSince.map { now - $0 >= ConflictConstants.selfPresWarning } ?? false
+            if warned {
+                pilotForcedGoAround(arr, penalty: Tune.selfPreservationPenalty, selfPreservation: true)
+            } else {
+                pilotForcedGoAround(arr, penalty: Tune.goAroundPenalty, selfPreservation: false)
+            }
         }
 
         for ac in aircraft where previousBands[ac.id.raw] != ac.band {
@@ -853,6 +1135,11 @@ extension SimEngine {
     /// SAVE table (PRD law). Called for player goAround / cancel-takeoff hold.
     private func adjudicateResolution(_ ac: Aircraft, isGoAround: Bool) {
         if let ep = conflicts.worstEpisode(involving: ac.id) {
+            // B8 — resolving your own manufactured gap earns respect, not points.
+            if ep.playerManufactured {
+                conflicts.clear(involving: ac.id)
+                return
+            }
             if ep.sustained {
                 scoreboard.savesEarned += 1
                 awardBadge(.lateSave, to: ac, note: "LATE SAVE on \(ac.callsign.display)")
@@ -872,16 +1159,21 @@ extension SimEngine {
     }
 
     private func armTightGap(_ ac: Aircraft, now: Double) {
-        guard let (_, ta) = committedArrival(), ta <= Tune.tightGapWindow else { return }
-        let m = ta - (timeUntilAirborne(ac) + ConflictConstants.liftoffBuffer)
-        if m >= 0 && m < ConflictConstants.amberThreshold { ac.tightGapArmed = true }
+        guard let first = committedArrivals().first, first.ta <= Tune.tightGapWindow else { return }
+        let m = first.ta - (timeUntilAirborne(ac) + ConflictConstants.liftoffBuffer)
+        if m >= 0 && m < ConflictConstants.amberThreshold {
+            ac.tightGapArmed = true
+            ac.tightGapArmedArrival = first.ac.id       // B16 — pin the arrival
+        }
     }
 
     private func adjudicateTightGap(_ ac: Aircraft, now: Double) {
-        guard ac.tightGapArmed else { return }
+        guard ac.tightGapArmed, let armed = ac.tightGapArmedArrival else { return }
         ac.tightGapArmed = false
-        guard let (_, ta) = committedArrival() else { return }
-        if ta - ConflictConstants.liftoffBuffer >= 0 {
+        ac.tightGapArmedArrival = nil
+        // B16 — pay only if the SAME arrival is still inbound and made it.
+        guard let match = committedArrivals().first(where: { $0.ac.id == armed }) else { return }
+        if match.ta - ConflictConstants.liftoffBuffer >= 0 {
             awardBadge(.tightGap, to: ac,
                        note: "TIGHT GAP — \(ac.callsign.display) off inside the arrival gap")
         }
@@ -900,7 +1192,24 @@ extension SimEngine {
     private func checkShiftEnd(_ now: Double) {
         guard !shiftEndedFired, now >= script.duration else { return }
         let unresolved = aircraft.contains { !$0.isResolved }
-        guard !unresolved || now >= script.duration + Tune.forceEndGrace else { return }
+        if unresolved && now < script.duration + Tune.forceEndGrace { return }
+
+        // B10 — never report with aircraft still flying: bank any pending
+        // movement at base points and resolve every strip, THEN publish.
+        if unresolved {
+            for ac in aircraft where !ac.isResolved {
+                if !ac.movementScored {
+                    if ac.isArrival && (ac.phase.isAirborne || ac.phase == .rollout || ac.phase == .exitingRunway) {
+                        completeMovement(ac, isLanding: true)
+                    } else if !ac.isArrival && ac.phase.isAirborne {
+                        completeMovement(ac, isLanding: false)
+                    }
+                }
+                ac.phase = .removed
+                eventQueue.append(.aircraftRemoved(ac.id))
+            }
+        }
+
         shiftEndedFired = true
         shiftPhase = .ended
         eventQueue.append(.shiftPhaseChanged(.ended))
@@ -911,8 +1220,11 @@ extension SimEngine {
         var delaySum = retiredDelaySum
         var count = retiredCount
         for ac in aircraft { delaySum += ac.delaySeconds; count += 1 }
-        let report = scoreboard.makeReport(script: script,
-                                           averageDelay: count == 0 ? 0 : delaySum / Double(count))
+        // B11 — grade against traffic that actually spawned.
+        let report = scoreboard.makeReport(
+            parScore: max(1, spawnedParScore),
+            parMovements: max(1, spawnedParMovements),
+            averageDelay: count == 0 ? 0 : delaySum / Double(count))
         eventQueue.append(.shiftEnded(report))
     }
 
@@ -946,12 +1258,13 @@ extension SimEngine {
             var c: [Command] = []
             if !ac.clearedToLand { c.append(.clearedToLand) }
             c.append(.goAround)
-            if !ac.expedited { c.append(.expediteExit) }
+            // B15 — only offer expedite to a type that can actually make an
+            // early turnoff (the Comet cannot, so the verb isn't a scam).
+            if !ac.expedited && ac.kind != .comet60 { c.append(.expediteExit) }
             return c
-        case .flare:
-            return ac.expedited ? [] : [.expediteExit]
-        case .rollout:
-            return ac.expedited ? [] : [.expediteExit]
+        case .flare, .rollout:
+            // B15 — no phantom expedite for the Comet.
+            return (ac.expedited || ac.kind == .comet60) ? [] : [.expediteExit]
         case .exitingRunway, .taxiToApron, .taxiToRunway:
             return ac.holdingPosition ? [.continueTaxi] : [.holdPosition]
         case .holdingShort:
@@ -962,7 +1275,6 @@ extension SimEngine {
             return [.clearedForTakeoff(immediate: false),
                     .clearedForTakeoff(immediate: true)]
         case .takeoffRoll:
-            // Abort window: still slow on the roll.
             return ac.speed < ac.kind.rotateSpeed * 0.7 ? [.holdPosition] : []
         case .parkedArrival, .departedHandoff:
             return [.handoff]

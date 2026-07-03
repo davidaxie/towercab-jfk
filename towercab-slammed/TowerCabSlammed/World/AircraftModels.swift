@@ -166,7 +166,9 @@ private func haloNode(colorKey: String, color: UIColor, size: CGFloat) -> SCNNod
 }
 
 /// Emissive nav bulb + additive halo billboard. No SCNLight.
-private func navLightNode(colorKey: String, color: UIColor, haloSize: CGFloat) -> SCNNode {
+/// Returns the halo separately so it can distance-scale (D25).
+private func navLightNode(colorKey: String, color: UIColor, haloSize: CGFloat)
+    -> (node: SCNNode, halo: SCNNode) {
     let bulb = SCNSphere(radius: 0.04)
     bulb.segmentCount = 8
     let m = SCNMaterial()
@@ -175,7 +177,27 @@ private func navLightNode(colorKey: String, color: UIColor, haloSize: CGFloat) -
     bulb.materials = [m]
     let n = SCNNode(geometry: bulb)
     n.castsShadow = false
-    n.addChildNode(haloNode(colorKey: colorKey, color: color, size: haloSize))
+    let halo = haloNode(colorKey: colorKey, color: color, size: haloSize)
+    n.addChildNode(halo)
+    return (n, halo)
+}
+
+/// D24: radial-gradient contact shadow planted at ground contact. Fades with
+/// phase in CraftEntity.update; fully visible by default for parked statics.
+private func makeContactShadow(span: CGFloat, length: CGFloat) -> SCNNode {
+    let plane = SCNPlane(width: span * 0.55, height: length * 0.8)
+    let m = SCNMaterial()
+    m.lightingModel = .constant
+    m.diffuse.contents = ArtTextures.contactShadow()
+    m.blendMode = .alpha
+    m.writesToDepthBuffer = false
+    plane.materials = [m]
+    let n = SCNNode(geometry: plane)
+    n.eulerAngles.x = -.pi / 2
+    n.position.y = 0.02
+    n.opacity = 0.42
+    n.castsShadow = false
+    n.renderingOrder = 5
     return n
 }
 
@@ -188,6 +210,11 @@ private struct CraftParts {
     let blurDisc: SCNNode?
     let beaconNodes: [SCNNode]
     let strobeNodes: [SCNNode]
+    /// Steady nav/tail bulbs — off at build (parked statics), lit in update().
+    let navNodes: [SCNNode]
+    /// Nav/beacon/strobe halo billboards that distance-scale (D25).
+    let scalingHalos: [SCNNode]
+    let contactShadow: SCNNode
     let landingLight: SCNLight
     let landingGlow: [SCNNode]
     /// (pivot node, euler angles when fully retracted)
@@ -271,24 +298,28 @@ private struct LightSpec {
 }
 
 private func makeLightKit(on body: SCNNode, spec: LightSpec)
-    -> (beacons: [SCNNode], strobes: [SCNNode], light: SCNLight, glow: [SCNNode]) {
+    -> (beacons: [SCNNode], strobes: [SCNNode], navs: [SCNNode], halos: [SCNNode],
+        light: SCNLight, glow: [SCNNode]) {
     let red = UIColor(red: 1.0, green: 0.15, blue: 0.1, alpha: 1)
     let green = UIColor(red: 0.15, green: 1.0, blue: 0.35, alpha: 1)
     let white = UIColor(white: 1, alpha: 1)
 
     let navL = navLightNode(colorKey: "red", color: red, haloSize: 0.7)
-    navL.position = spec.navLeft
+    navL.node.position = spec.navLeft
     let navR = navLightNode(colorKey: "green", color: green, haloSize: 0.7)
-    navR.position = spec.navRight
+    navR.node.position = spec.navRight
     let tail = navLightNode(colorKey: "white", color: white, haloSize: 0.6)
-    tail.position = spec.tail
-    body.addChildNode(navL)
-    body.addChildNode(navR)
-    body.addChildNode(tail)
+    tail.node.position = spec.tail
+    let navs = [navL.node, navR.node, tail.node]
+    for n in navs {
+        n.opacity = 0   // all lights off until update() runs (parked statics)
+        body.addChildNode(n)
+    }
 
     let beacon = navLightNode(colorKey: "red", color: red, haloSize: 0.9)
-    beacon.position = spec.beacon
-    body.addChildNode(beacon)
+    beacon.node.position = spec.beacon
+    beacon.node.opacity = 0
+    body.addChildNode(beacon.node)
 
     var strobes: [SCNNode] = []
     for x in [spec.navLeft.x - 0.12, spec.navRight.x + 0.12] {
@@ -298,6 +329,7 @@ private func makeLightKit(on body: SCNNode, spec: LightSpec)
         body.addChildNode(s)
         strobes.append(s)
     }
+    let halos = [navL.halo, navR.halo, tail.halo, beacon.halo] + strobes
 
     // Landing light: warm emissive lens + halo + the single SCNLight spot.
     let warm = UIColor(red: 1.0, green: 0.9, blue: 0.72, alpha: 1)
@@ -327,7 +359,7 @@ private func makeLightKit(on body: SCNNode, spec: LightSpec)
     lensNode.opacity = 0
     body.addChildNode(lensNode)
 
-    return ([beacon], strobes, spot, [lensNode])
+    return ([beacon.node], strobes, navs, halos, spot, [lensNode])
 }
 
 // MARK: - The three airframes
@@ -356,6 +388,11 @@ private func buildLark(livery: Livery) -> CraftParts {
         cabin.geometry?.materials = [canopyGlassMaterial()]
         cabin.position = SCNVector3(0, 1.72, -1.35)
         root.addChildNode(cabin)
+        // A14: wraparound rear-window hint — dark glass band aft of the cabin.
+        let rearWindow = SCNNode(geometry: SCNBox(width: 0.98, height: 0.26, length: 0.46, chamferRadius: 0.1))
+        rearWindow.geometry?.materials = [canopyGlassMaterial()]
+        rearWindow.position = SCNVector3(0, 1.70, -0.38)
+        root.addChildNode(rearWindow)
 
         let wing = wingNode(span: 11.0, rootChord: 1.5, tipChord: 1.05, sweep: 0,
                             thickness: 0.13, material: bodyMat)
@@ -371,8 +408,9 @@ private func buildLark(livery: Livery) -> CraftParts {
             }
         }
         for s in [Float(-1), Float(1)] {
+            // A14: strut meets the wing at ~40% semi-span (x 2.2 of 5.5).
             root.addChildNode(strutNode(from: SCNVector3(0.66 * s, 1.35, -1.05),
-                                        to: SCNVector3(1.95 * s, 1.95, -1.15),
+                                        to: SCNVector3(2.2 * s, 1.96, -1.15),
                                         radius: 0.032, material: bodyMat))
         }
 
@@ -422,9 +460,12 @@ private func buildLark(livery: Livery) -> CraftParts {
 
     let body = SCNNode()
     body.addChildNode(airframe)
-    let prop = makePropGroup(at: SCNVector3(0, cy, -3.94), bladeCount: 2, bladeLength: 0.82,
-                             spinnerScale: 1.0, discDiameter: 1.95)
+    // A14: 2-blade McCauley-style prop, Ø 1.91 m.
+    let prop = makePropGroup(at: SCNVector3(0, cy, -3.94), bladeCount: 2, bladeLength: 0.875,
+                             spinnerScale: 1.0, discDiameter: 1.91)
     body.addChildNode(prop.group)
+    let shadow = makeContactShadow(span: 11.0, length: 8.0)
+    body.addChildNode(shadow)
     let kit = makeLightKit(on: body, spec: LightSpec(
         navLeft: SCNVector3(-5.5, 2.0, -1.35),
         navRight: SCNVector3(5.5, 2.0, -1.35),
@@ -433,6 +474,7 @@ private func buildLark(livery: Livery) -> CraftParts {
         landing: SCNVector3(0, 0.93, -3.92)))
     return CraftParts(body: body, propGroup: prop.group, blades: prop.blades,
                       blurDisc: prop.disc, beaconNodes: kit.beacons, strobeNodes: kit.strobes,
+                      navNodes: kit.navs, scalingHalos: kit.halos, contactShadow: shadow,
                       landingLight: kit.light, landingGlow: kit.glow, gear: [],
                       smokeOffset: SCNVector3(0, 0.26, -0.35))
 }
@@ -526,6 +568,8 @@ private func buildVela(livery: Livery) -> CraftParts {
     let prop = makePropGroup(at: SCNVector3(0, cy, -3.92), bladeCount: 3, bladeLength: 0.78,
                              spinnerScale: 1.05, discDiameter: 1.85)
     body.addChildNode(prop.group)
+    let shadow = makeContactShadow(span: 11.7, length: 7.9)
+    body.addChildNode(shadow)
     let kit = makeLightKit(on: body, spec: LightSpec(
         navLeft: SCNVector3(-5.8, 0.8, -0.93),
         navRight: SCNVector3(5.8, 0.8, -0.93),
@@ -534,6 +578,7 @@ private func buildVela(livery: Livery) -> CraftParts {
         landing: SCNVector3(0, 0.72, -3.9)))
     return CraftParts(body: body, propGroup: prop.group, blades: prop.blades,
                       blurDisc: prop.disc, beaconNodes: kit.beacons, strobeNodes: kit.strobes,
+                      navNodes: kit.navs, scalingHalos: kit.halos, contactShadow: shadow,
                       landingLight: kit.light, landingGlow: kit.glow, gear: [],
                       smokeOffset: SCNVector3(0, 0.28, -0.5))
 }
@@ -548,9 +593,10 @@ private func buildComet(livery: Livery) -> CraftParts {
         let bodyMat = pbrMaterial(pal.body, roughness: pal.roughness, metalness: pal.metalness)
         let accentMat = pbrMaterial(pal.accent, roughness: 0.25, metalness: 0.7)
 
-        let fus = latheNode([(-9.20, 0.10), (-9.00, 0.50), (-8.20, 0.85), (-6.80, 1.05),
-                             (-4.50, 1.15), (2.00, 1.15), (4.80, 1.02), (6.80, 0.78),
-                             (8.40, 0.45), (9.25, 0.12)],
+        // A16: Challenger 350 proportions — 20.9 m nose-to-tail.
+        let fus = latheNode([(-10.40, 0.10), (-10.15, 0.50), (-9.25, 0.85), (-7.70, 1.05),
+                             (-5.10, 1.15), (2.20, 1.15), (5.40, 1.02), (7.70, 0.78),
+                             (9.50, 0.45), (10.50, 0.12)],
                             segments: 32,
                             material: fuselageMaterial(kind: .comet60, livery: livery))
         fus.position.y = cy
@@ -561,25 +607,29 @@ private func buildComet(livery: Livery) -> CraftParts {
         (screen.geometry as? SCNSphere)?.segmentCount = 24
         screen.geometry?.materials = [canopyGlassMaterial()]
         screen.scale = SCNVector3(0.78, 0.5, 1.15)
-        screen.position = SCNVector3(0, 2.62, -7.15)
+        screen.position = SCNVector3(0, 2.62, -8.05)
         root.addChildNode(screen)
 
-        let wing = wingNode(span: 19.6, rootChord: 3.4, tipChord: 1.0, sweep: 2.6,
+        // D26: 19.9 m planform + 0.55 m canted-winglet reach per side = 21.0 m.
+        let wing = wingNode(span: 19.9, rootChord: 3.4, tipChord: 1.0, sweep: 2.6,
                             thickness: 0.24, material: bodyMat)
         wing.position = SCNVector3(0, 1.0, 2.2)
         root.addChildNode(wing)
 
-        // Winglets.
+        // Canted winglets — 1.1 m tall, ~30° outboard cant.
         for s in [Float(-1), Float(1)] {
             let wp = UIBezierPath()
             wp.move(to: CGPoint(x: 0, y: 0))
-            wp.addLine(to: CGPoint(x: 0.18, y: 0.78))
-            wp.addQuadCurve(to: CGPoint(x: 0.5, y: 0.82), controlPoint: CGPoint(x: 0.3, y: 0.85))
-            wp.addQuadCurve(to: CGPoint(x: 0.95, y: 0.0), controlPoint: CGPoint(x: 0.8, y: 0.25))
+            wp.addLine(to: CGPoint(x: 0.22, y: 1.02))
+            wp.addQuadCurve(to: CGPoint(x: 0.55, y: 1.10), controlPoint: CGPoint(x: 0.34, y: 1.14))
+            wp.addQuadCurve(to: CGPoint(x: 1.05, y: 0.0), controlPoint: CGPoint(x: 0.9, y: 0.3))
             wp.close()
             let wl = finNode(path: wp, thickness: 0.05, material: bodyMat)
-            wl.position = SCNVector3(9.72 * s, 1.12, 1.75)
-            root.addChildNode(wl)
+            let cant = SCNNode()
+            cant.position = SCNVector3(9.95 * s, 1.10, 1.75)
+            cant.eulerAngles.z = -0.52 * s
+            cant.addChildNode(wl)
+            root.addChildNode(cant)
         }
 
         // Aft fuselage-mounted nacelles + pylons.
@@ -590,17 +640,19 @@ private func buildComet(livery: Livery) -> CraftParts {
             let nac = latheNode([(-1.75, 0.16), (-1.62, 0.44), (-1.15, 0.56), (-0.20, 0.58),
                                  (0.90, 0.52), (1.60, 0.30), (1.85, 0.12)],
                                 segments: 20, material: nacMat)
-            nac.position = SCNVector3(1.72 * s, 2.62, 5.3)
+            nac.position = SCNVector3(1.72 * s, 2.62, 5.9)
             root.addChildNode(nac)
             let intake = SCNNode(geometry: SCNCylinder(radius: 0.42, height: 0.04))
             intake.geometry?.materials = [intakeMat]
             intake.eulerAngles.x = .pi / 2
-            intake.position = SCNVector3(1.72 * s, 2.62, 3.58)
+            intake.position = SCNVector3(1.72 * s, 2.62, 4.18)
             root.addChildNode(intake)
+            // D26: near-flat stub pylon rooted at the fuselage shoulder —
+            // kills the splayed-fin silhouette.
             let pylon = SCNNode(geometry: SCNBox(width: 0.14, height: 0.55, length: 1.7, chamferRadius: 0.05))
             pylon.geometry?.materials = [bodyMat]
-            pylon.eulerAngles.z = 0.5 * s
-            pylon.position = SCNVector3(1.25 * s, 2.45, 5.25)
+            pylon.eulerAngles.z = 0.25 * s
+            pylon.position = SCNVector3(1.35 * s, 2.45, 5.85)
             root.addChildNode(pylon)
         }
 
@@ -613,16 +665,16 @@ private func buildComet(livery: Livery) -> CraftParts {
         finPath.addQuadCurve(to: CGPoint(x: 3.40, y: 0.0), controlPoint: CGPoint(x: 3.0, y: 0.06))
         finPath.close()
         let fin = finNode(path: finPath, thickness: 0.2, material: bodyMat)
-        fin.position = SCNVector3(0, 2.45, 8.9)
+        fin.position = SCNVector3(0, 2.45, 9.9)
         root.addChildNode(fin)
         let stab = wingNode(span: 6.4, rootChord: 1.5, tipChord: 0.8, sweep: 0.8,
                             thickness: 0.14, material: bodyMat)
-        stab.position = SCNVector3(0, 5.85, 8.55)
+        stab.position = SCNVector3(0, 5.85, 9.55)
         root.addChildNode(stab)
         if livery == .meridianVIP {
             let crest = SCNNode(geometry: SCNBox(width: 0.26, height: 0.62, length: 0.44, chamferRadius: 0.08))
             crest.geometry?.materials = [accentMat]
-            crest.position = SCNVector3(0, 4.85, 7.85)
+            crest.position = SCNVector3(0, 4.85, 8.85)
             root.addChildNode(crest)
         }
         return root
@@ -651,7 +703,7 @@ private func buildComet(livery: Livery) -> CraftParts {
     }
 
     let nosePivot = SCNNode()
-    nosePivot.position = SCNVector3(0, 1.16, -6.6)
+    nosePivot.position = SCNVector3(0, 1.16, -7.4)
     nosePivot.addChildNode(gearLeg(strutLen: 0.86, wheelRadius: 0.30, wheelWidth: 0.11, twin: true))
     body.addChildNode(nosePivot)
 
@@ -665,14 +717,17 @@ private func buildComet(livery: Livery) -> CraftParts {
         gear.append((pivot, SCNVector3(0, 0, 1.85 * -s)))  // mains fold inboard
     }
 
+    let shadow = makeContactShadow(span: 21.0, length: 20.9)
+    body.addChildNode(shadow)
     let kit = makeLightKit(on: body, spec: LightSpec(
-        navLeft: SCNVector3(-9.68, 1.15, 1.8),
-        navRight: SCNVector3(9.68, 1.15, 1.8),
-        tail: SCNVector3(0, 2.28, 9.3),
+        navLeft: SCNVector3(-9.9, 1.12, 1.8),
+        navRight: SCNVector3(9.9, 1.12, 1.8),
+        tail: SCNVector3(0, 2.30, 10.55),
         beacon: SCNVector3(0, 3.14, -1.0),
-        landing: SCNVector3(0, 1.42, -9.0)))
+        landing: SCNVector3(0, 1.42, -10.2)))
     return CraftParts(body: body, propGroup: nil, blades: nil, blurDisc: nil,
                       beaconNodes: kit.beacons, strobeNodes: kit.strobes,
+                      navNodes: kit.navs, scalingHalos: kit.halos, contactShadow: shadow,
                       landingLight: kit.light, landingGlow: kit.glow, gear: gear,
                       smokeOffset: SCNVector3(0, 0.5, 1.4))
 }
@@ -735,12 +790,17 @@ final class CraftEntity: AircraftEntity {
             parts.blurDisc?.opacity = CGFloat(0.55 * max(0, min(1, (propRate - 22) / 28)))
         }
 
+        // Nav lights + beacon — on whenever the aircraft is alive; parked
+        // statics never reach update() and stay dark.
+        let shutDown = phase == .parkedArrival || phase == .removed
+        for n in parts.navNodes { n.opacity = shutDown ? 0 : 1 }
+
         // Beacon — soft red pulse, ~1.2 s cycle.
         let pulse = pow(max(0, sin(fmod(time, 1.2) / 1.2 * .pi)), 3.0)
-        for n in parts.beaconNodes { n.opacity = CGFloat(0.15 + 0.85 * pulse) }
+        for n in parts.beaconNodes { n.opacity = shutDown ? 0 : CGFloat(0.15 + 0.85 * pulse) }
 
         // Strobes — brief white double-flash, ~1.8 s cycle, off when parked.
-        let parked = phase == .parkedArrival || phase == .startingUp || phase == .removed
+        let parked = shutDown || phase == .startingUp
         let sp = fmod(time, 1.8)
         let flash = !parked && (sp < 0.05 || (sp > 0.14 && sp < 0.19))
         for n in parts.strobeNodes { n.opacity = flash ? 1 : 0 }
@@ -758,6 +818,26 @@ final class CraftEntity: AircraftEntity {
             n.scale = SCNVector3(haloScale, haloScale, haloScale)
         }
         parts.landingLight.intensity = 2600 * (parts.landingGlow.first?.opacity ?? 0)
+
+        // D25: nav/beacon/strobe halos get the same distance treatment so
+        // traffic still sparkles at pattern range.
+        let navHaloScale = max(1, min(8, dist / 250))
+        for h in parts.scalingHalos {
+            h.scale = SCNVector3(navHaloScale, navHaloScale, navHaloScale)
+        }
+
+        // D24: contact shadow — planted on the ground, gone a couple of
+        // seconds after liftoff, back through the flare.
+        let grounded = !phase.isAirborne || phase == .flare
+        let shadowTarget: CGFloat = grounded ? 0.42 : 0
+        if lastPhase == nil {
+            parts.contactShadow.opacity = shadowTarget  // snap on spawn
+        } else {
+            let shadowStep = CGFloat(dt / 2.0) * 0.42
+            let currentShadow = parts.contactShadow.opacity
+            parts.contactShadow.opacity = currentShadow
+                + max(-shadowStep, min(shadowStep, shadowTarget - currentShadow))
+        }
 
         // Retractable gear — smooth ~1.5 s swing.
         if !parts.gear.isEmpty {

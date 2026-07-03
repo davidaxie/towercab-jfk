@@ -20,21 +20,22 @@ struct ScoreScreenView: View {
             Color(red: 0.09, green: 0.055, blue: 0.04).opacity(0.74)
                 .ignoresSafeArea()
 
-            VStack(spacing: 22) {
-                HStack(alignment: .top, spacing: 36) {
+            // C3/D33 — compact card: bounded height, no stretched dead space.
+            VStack(spacing: 18) {
+                HStack(alignment: .center, spacing: 32) {
                     gradeColumn
                     Rectangle()
                         .fill(Color.white.opacity(0.12))
-                        .frame(width: 1)
-                        .padding(.vertical, 8)
+                        .frame(width: 1, height: 232)   // C3 — divider never drives height
                     detailColumn
                 }
                 buttonRow
                     .opacity(detailsRevealed ? 1 : 0)
             }
-            .padding(.horizontal, 40)
-            .padding(.vertical, 30)
-            .frame(maxWidth: 760)
+            .padding(.horizontal, 36)
+            .padding(.vertical, 24)
+            .frame(maxWidth: 760, maxHeight: 560)
+            .fixedSize(horizontal: false, vertical: true)
             .etchedGlass(cornerRadius: 22, tintOpacity: 0.55)
         }
         .onAppear(perform: runEntrance)
@@ -71,7 +72,7 @@ struct ScoreScreenView: View {
             Text(report.grade.rawValue)
                 .font(.system(size: 132, weight: .black, design: .rounded))
                 .foregroundStyle(gradeStyle)
-                .shadow(color: gradeGlow.opacity(0.5), radius: 18)
+                .shadow(color: Theme.amber.opacity(gradeGlowOpacity), radius: 18)
                 .scaleEffect(gradeLanded ? 1.0 : 1.55)
                 .opacity(gradeLanded ? 1.0 : 0.0)
 
@@ -89,6 +90,8 @@ struct ScoreScreenView: View {
         .frame(minWidth: 190)
     }
 
+    // C4/D33 — every grade gets the amber/gold stamp treatment; lower grades
+    // deepen toward bronze but never fall out of the palette into grey.
     private var gradeStyle: LinearGradient {
         let colors: [Color]
         switch report.grade {
@@ -98,25 +101,29 @@ struct ScoreScreenView: View {
         case .a:
             colors = [Theme.amber, Theme.amberDeep]
         case .b:
-            colors = [Color.white.opacity(0.95), Theme.coolSteel]
-        case .c, .d:
-            colors = [Color.white.opacity(0.6), Color.white.opacity(0.35)]
+            colors = [Theme.amber.opacity(0.95), Theme.amberDeep]
+        case .c:
+            colors = [Theme.amberDeep, Color(red: 0.62, green: 0.37, blue: 0.09)]
+        case .d:
+            colors = [Color(red: 0.68, green: 0.40, blue: 0.11), Color(red: 0.48, green: 0.28, blue: 0.08)]
         }
         return LinearGradient(colors: colors, startPoint: .top, endPoint: .bottom)
     }
 
-    private var gradeGlow: Color {
+    private var gradeGlowOpacity: Double {
         switch report.grade {
-        case .s, .a: return Theme.amber
-        case .b: return Theme.coolSteel
-        case .c, .d: return .clear
+        case .s: return 0.5
+        case .a: return 0.42
+        case .b: return 0.32
+        case .c: return 0.24
+        case .d: return 0.18
         }
     }
 
     // MARK: Right column — axes, badges, stats, quote
 
     private var detailColumn: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 14) {
             axisBars
             if !report.badges.isEmpty {
                 badgeChips.opacity(detailsRevealed ? 1 : 0)
@@ -186,28 +193,44 @@ struct ScoreScreenView: View {
         }
     }
 
+    // C14 — chips wrap in an adaptive grid, capped at 8 with a "+N" tail chip.
     private var badgeChips: some View {
-        HStack(spacing: 8) {
-            ForEach(badgeTally) { entry in
-                Text(entry.chipText)
-                    .font(Theme.display(15, .bold))
-                    .tracking(1.0)
-                    .foregroundStyle(entry.isSave ? Theme.teal : Theme.amber)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(
-                        Capsule().fill(Color.white.opacity(0.07))
-                            .overlay(Capsule().strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
-                    )
-                    .lineLimit(1)
+        let shown = Array(badgeTally.prefix(8))
+        let extra = badgeTally.count - shown.count
+        return LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 128), spacing: 8, alignment: .leading)],
+            alignment: .leading, spacing: 8
+        ) {
+            ForEach(shown) { entry in
+                chip(entry.chipText, tint: entry.isSave ? Theme.teal : Theme.amber)
+            }
+            if extra > 0 {
+                chip("+\(extra)", tint: Theme.warmWhite.opacity(0.7))
             }
         }
     }
 
+    private func chip(_ text: String, tint: Color) -> some View {
+        HStack {
+            Text(text)
+                .font(Theme.display(15, .bold))
+                .tracking(1.0)
+                .foregroundStyle(tint)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(
+                    Capsule().fill(Color.white.opacity(0.07))
+                        .overlay(Capsule().strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
+                )
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+    }
+
     private var statsRow: some View {
-        HStack(spacing: 26) {
-            stat("\(report.landings)", "LANDINGS")
-            stat("\(report.departures)", "DEPARTURES")
+        HStack(spacing: 16) {   // C4 — labels never wrap mid-word
+            stat("\(report.landings)", "LANDED")
+            stat("\(report.departures)", "DEPARTED")
             stat("×\(report.bestStreak)", "BEST STREAK")
             stat(String(format: "%.0fs", report.averageDelaySeconds), "AVG DELAY")
         }
@@ -220,7 +243,9 @@ struct ScoreScreenView: View {
                 .foregroundStyle(Theme.warmWhite)
             Text(label)
                 .font(Theme.display(15, .semibold))
-                .tracking(1.4)
+                .tracking(0.8)
+                .lineLimit(1)
+                .fixedSize()
                 .foregroundStyle(Theme.warmWhite.opacity(0.48))
         }
     }
@@ -247,6 +272,7 @@ struct ScoreScreenView: View {
                     }
             }
             .buttonStyle(PressScaleButtonStyle())
+            .accessibilityIdentifier("nextShift")
 
             Button {
                 actions?.restartShift()

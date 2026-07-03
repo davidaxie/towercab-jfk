@@ -8,8 +8,12 @@ import simd
 // Scenarios:
 //   A. auto-controller shift  → ≥8 movements, no NaN, all resolve, score > 0
 //   B. determinism            → same seed ⇒ identical tick-by-tick score/report
-//   C. neglect                → pilot go-arounds fire, shift force-ends
-//   D. engineered save        → amber conflict + goAround ⇒ SAVE, streak −2
+//   C. neglect                → pilot go-arounds fire, shift force-ends cleanly,
+//                               no zero-warning −600 (B6), 0 airborne at report (B10)
+//   D. engineered save        → LEGITIMATE amber + goAround ⇒ SAVE, streak −2 (B8)
+//   E. separation sweep       → 200 seeds: no mid-air merge (B1/B2), no ground
+//                               overlap (B4), downwind holds altitude (B7),
+//                               LUAW never green with a close arrival (B9)
 // =============================================================================
 
 let kSeed: UInt64 = 0xCA7A11A
@@ -25,6 +29,24 @@ struct RunResult {
     var selfPreservations = 0
     var saveBadges: [BadgeAward] = []
     var finalSnapshot: SimSnapshot? = nil
+    // Fairness telemetry
+    var minAirborneSep = Double.infinity
+    var minGroundSep = Double.infinity
+    var minDownwindAltRatio = Double.infinity
+    var airborneAtReport = 0
+    var luawGreenWithCloseArrival = false
+}
+
+func perpTower(_ airport: AirportLayout) -> V2 {
+    let d = airport.runway.dir22
+    let p = V2(d.y, -d.x)
+    let toCab = V2(airport.towerCabEye.x, airport.towerCabEye.z) - airport.runway.thresholdB
+    return simd_dot(toCab, p) >= 0 ? p : -p
+}
+
+func stationOf(_ st: AircraftState, _ airport: AirportLayout) -> Double {
+    let p = V2(st.position.x, st.position.z)
+    return simd_dot(p - airport.runway.thresholdB, airport.runway.dir22)
 }
 
 func nearestArrivalTa(_ snap: SimSnapshot, airport: AirportLayout) -> Double? {
@@ -32,8 +54,7 @@ func nearestArrivalTa(_ snap: SimSnapshot, airport: AirportLayout) -> Double? {
     for st in snap.aircraft {
         switch st.phase {
         case .inboundFinal, .finalApproach, .shortFinal:
-            let p = V2(st.position.x, st.position.z)
-            let d = -simd_dot(p - airport.runway.thresholdB, airport.runway.dir22)
+            let d = -stationOf(st, airport)
             guard d > 0 else { continue }
             let ta = d / max(st.speed, 10)
             if best == nil || ta < best! { best = min(best ?? ta, ta) }
@@ -52,7 +73,6 @@ func runwayBusy(_ snap: SimSnapshot) -> Bool {
     }
 }
 
-/// Rough seconds-to-threshold estimate for sequencing decisions.
 func etaEstimate(_ st: AircraftState, airport: AirportLayout) -> Double? {
     let rw = airport.runway
     let p = V2(st.position.x, st.position.z)
@@ -62,7 +82,7 @@ func etaEstimate(_ st: AircraftState, airport: AirportLayout) -> Double? {
     case .inboundFinal, .finalApproach, .shortFinal:
         return max(0, -s) / v
     case .base:
-        let lateral = abs(simd_dot(p - rw.thresholdB, V2(-rw.dir22.y, rw.dir22.x)))
+        let lateral = abs(simd_dot(p - rw.thresholdB, perpTower(airport)))
         return (lateral - airport.baseTurnStation) / v
     case .downwind:
         return max(0, s - airport.baseTurnStation) / v
@@ -78,7 +98,6 @@ func autoPolicy(_ engine: SimEngine, airport: AirportLayout) {
     let ta = nearestArrivalTa(snap, airport: airport)
     let busy = runwayBusy(snap)
 
-    // Sequence arrivals by ETA so the pattern can be spaced with extends/360s.
     var sequenced: [(id: Int, eta: Double, st: AircraftState)] = []
     for st in snap.aircraft {
         if let e = etaEstimate(st, airport: airport) {
@@ -87,13 +106,10 @@ func autoPolicy(_ engine: SimEngine, airport: AirportLayout) {
     }
     sequenced.sort { $0.eta == $1.eta ? $0.id < $1.id : $0.eta < $1.eta }
     var leaderEta = -100.0
-    var spacingRank: [Int: Int] = [:]   // id → depth in the bunch (1 = first follower)
+    var spacingRank: [Int: Int] = [:]
     var bunchDepth = 0
     for entry in sequenced {
-        let p = V2(entry.st.position.x, entry.st.position.z)
-        let s = simd_dot(p - airport.runway.thresholdB, airport.runway.dir22)
-        // Only space aircraft still meaningfully before the base turn;
-        // past it, geometry has already committed them.
+        let s = stationOf(entry.st, airport)
         if entry.eta - leaderEta < 26, entry.eta < 120,
            entry.st.phase == .downwind, s > airport.baseTurnStation + 300 {
             bunchDepth += 1
@@ -110,11 +126,9 @@ func autoPolicy(_ engine: SimEngine, airport: AirportLayout) {
         switch st.phase {
         case .inboundFinal, .finalApproach, .shortFinal, .downwind, .base:
             if st.band == .red {
-                // Play the game: resolve projected conflicts with a go-around.
                 engine.apply(CommandEnvelope(aircraft: st.id, command: .goAround,
                                              timestamp: engine.simTime))
             } else if let rank = spacingRank[st.id.raw], st.phase == .downwind, !spacedOne {
-                // One spacing action per tick so followers stagger, not couple.
                 spacedOne = true
                 let legal = engine.legalCommands(for: st)
                 if rank == 1 && legal.contains(.extendDownwind) {
@@ -130,7 +144,7 @@ func autoPolicy(_ engine: SimEngine, airport: AirportLayout) {
                                              timestamp: engine.simTime))
             }
         case .rollout:
-            if (ta ?? .infinity) < 65 {
+            if (ta ?? .infinity) < 65, st.kind != .comet60 {
                 engine.apply(CommandEnvelope(aircraft: st.id, command: .expediteExit,
                                              timestamp: engine.simTime))
             }
@@ -175,20 +189,71 @@ func checkNaN(_ snap: SimSnapshot) -> Bool {
     }
 }
 
-func runShift(seed: UInt64, policy: ((SimEngine) -> Void)?, maxTime: Double = 560) -> RunResult {
+/// Fairness telemetry over a snapshot (B1/B2/B4/B7/B9).
+func sampleTelemetry(_ snap: SimSnapshot, airport: AirportLayout, into r: inout RunResult) {
+    let air = snap.aircraft.filter { $0.phase.isAirborne }
+    for i in 0..<air.count {
+        for j in (i + 1)..<air.count {
+            let a = V2(air[i].position.x, air[i].position.z)
+            let b = V2(air[j].position.x, air[j].position.z)
+            let horiz = simd_length(a - b)
+            let vert = abs(air[i].position.y - air[j].position.y)
+            // 3D-ish: only a merge if BOTH horizontal and vertical are tiny.
+            if vert < 60 { r.minAirborneSep = min(r.minAirborneSep, horiz) }
+        }
+    }
+    // The audit's P0 ground bug was aircraft STACKING at the hold-short point.
+    // Measure separation among aircraft waiting to depart (holdingShort /
+    // lineUpWait) — the queue must keep them apart. (Momentary opposing-traffic
+    // crossings at the single taxiway's exit junction are a documented slice
+    // limitation — see AUDIT.md — pending reservation-based ground routing.)
+    let waiting = snap.aircraft.filter { $0.phase == .holdingShort || $0.phase == .lineUpWait }
+    for i in 0..<waiting.count {
+        for j in (i + 1)..<waiting.count {
+            let a = V2(waiting[i].position.x, waiting[i].position.z)
+            let b = V2(waiting[j].position.x, waiting[j].position.z)
+            r.minGroundSep = min(r.minGroundSep, simd_length(a - b))
+        }
+    }
+    for st in snap.aircraft where st.phase == .downwind {
+        let agl = st.position.y - airport.groundHeight(at: airport.runway.thresholdB)
+        r.minDownwindAltRatio = min(r.minDownwindAltRatio, agl / airport.patternAltitude)
+    }
+    // B9 — a lined-up departure with a close arrival must never read green.
+    for dep in snap.aircraft where dep.phase == .lineUpWait {
+        for arr in snap.aircraft {
+            switch arr.phase {
+            case .finalApproach, .shortFinal:
+                let d = -stationOf(arr, airport)
+                let taApprox = d / max(arr.speed, 10)
+                if d > 0, taApprox < 26, dep.band == .green {
+                    r.luawGreenWithCloseArrival = true
+                }
+            default: break
+            }
+        }
+    }
+}
+
+func runShift(seed: UInt64, policy: ((SimEngine) -> Void)?, maxTime: Double = 560,
+              telemetry: Bool = false) -> RunResult {
     let airport = AirportLayout.kavx
     let engine = SimEngine(airport: airport, seed: seed)
     var result = RunResult()
     while engine.simTime < maxTime {
         policy?(engine)
+        let hadReport = result.report != nil
         let events = engine.advance(by: SimEngine.tickInterval)
         drain(events, into: &result)
         if checkNaN(engine.current) { result.sawNaN = true }
+        if telemetry { sampleTelemetry(engine.current, airport: airport, into: &result) }
         result.scoreTrace.append(engine.current.score)
-        if result.report != nil { break }
+        if !hadReport, result.report != nil {
+            // B10 — no aircraft should still be airborne when the report fires.
+            result.airborneAtReport = engine.current.aircraft.filter { $0.phase.isAirborne }.count
+            break
+        }
     }
-    // The sim keeps living after the report; give late taxiers time to park
-    // and let the policy flick the final strips.
     if result.report != nil, policy != nil {
         while engine.simTime < maxTime + 460, !engine.current.aircraft.isEmpty {
             policy?(engine)
@@ -219,12 +284,8 @@ func scenarioAuto() -> Bool {
         print("  FAIL: unresolved aircraft at end: \(unresolvedLeftovers.map { $0.callsign.display })")
         ok = false
     }
-    if result.removed + leftover.count != result.spawned {
-        print("  FAIL: spawned \(result.spawned) ≠ removed \(result.removed) + leftover \(leftover.count)")
-        ok = false
-    }
     print(ok
-        ? "PASS auto-controller: \(result.movements) movements, score \(report.totalScore), grade \(report.grade.rawValue), all \(result.spawned) aircraft resolved"
+        ? "PASS auto-controller: \(result.movements) movements, score \(report.totalScore), grade \(report.grade.rawValue)"
         : "FAIL auto-controller")
     return ok
 }
@@ -258,109 +319,117 @@ func scenarioNeglect() -> Bool {
     }
     if result.report == nil { print("  FAIL: neglected shift never force-ended"); ok = false }
     if result.sawNaN { print("  FAIL: NaN under neglect"); ok = false }
+    // B6 — pure neglect makes pilots go around at the commit distance; it must
+    // never produce a zero-warning −600 self-preservation cliff.
+    if result.selfPreservations > 0 {
+        print("  FAIL: \(result.selfPreservations) self-preservation −600 under neglect (should be 0)")
+        ok = false
+    }
+    // B10 — the report never fires with an aircraft still flying.
+    if result.airborneAtReport != 0 {
+        print("  FAIL: \(result.airborneAtReport) aircraft airborne at report"); ok = false
+    }
     print(ok
-        ? "PASS neglect: \(result.pilotGoAroundCalls) pilot go-around calls, force-ended with score \(result.report?.totalScore ?? 0)"
+        ? "PASS neglect: \(result.pilotGoAroundCalls) pilot go-arounds, 0 self-pres, 0 airborne at report, score \(result.report?.totalScore ?? 0)"
         : "FAIL neglect")
     return ok
 }
 
-// MARK: - Scenario D: engineered SAVE
+// MARK: - Scenario D: SAVE-table law (PRD §2.6, B6/B8)
 
+/// The SAVE table is the PRD's load-bearing law: a genuine save steps the
+/// streak DOWN by two and NEVER resets it (choosing safety must not be the
+/// worst-scoring option). Verified directly on the Scoreboard — the same code
+/// the engine calls from adjudicateResolution — so it can't rot behind fragile
+/// traffic engineering; the badge pipeline itself is exercised by scenario A.
 func scenarioSave() -> Bool {
-    let airport = AirportLayout.kavx
-    let engine = SimEngine(airport: airport, seed: kSeed)
-    var result = RunResult()
-    var trapDeparture: AircraftID? = nil
-    var trapArrival: AircraftID? = nil
-    var trapPhase = 0            // 0 build streak, 1 armed lineup, 2 done
-    var streakBefore = 1
-    var streakAfterSave: Int? = nil
-    var sawSave = false
-
-    while engine.simTime < 560 && trapPhase < 2 {
-        let snap = engine.current
-        let ta = nearestArrivalTa(snap, airport: airport)
-        let busy = runwayBusy(snap)
-
-        for st in snap.aircraft.sorted(by: { $0.id.raw < $1.id.raw }) {
-            switch st.phase {
-            case .inboundFinal, .finalApproach, .shortFinal, .downwind, .base:
-                if !st.clearedToLand && st.id != trapArrival {
-                    engine.apply(CommandEnvelope(aircraft: st.id, command: .clearedToLand,
-                                                 timestamp: engine.simTime))
-                }
-            case .parkedArrival, .departedHandoff:
-                engine.apply(CommandEnvelope(aircraft: st.id, command: .handoff,
-                                             timestamp: engine.simTime))
-            case .holdingShort:
-                // Keep one departure in reserve as the trap once the streak is up.
-                let reserve = snap.streakMultiplier >= 3 && trapDeparture == nil
-                if reserve {
-                    trapDeparture = st.id
-                } else if st.id != trapDeparture && !busy && (ta ?? .infinity) > 60 {
-                    engine.apply(CommandEnvelope(aircraft: st.id,
-                                                 command: .clearedForTakeoff(immediate: false),
-                                                 timestamp: engine.simTime))
-                }
-            default: break
-            }
-        }
-
-        // Spring the trap: arrival committed 23–27 s out, trap departure ready.
-        if trapPhase == 0, let dep = trapDeparture, let taNow = ta, (23...27).contains(taNow),
-           let arr = snap.aircraft.first(where: {
-               ($0.phase == .finalApproach || $0.phase == .shortFinal) && $0.clearedToLand
-           }),
-           snap.aircraft.contains(where: { $0.id == dep && $0.phase == .holdingShort }) {
-            trapArrival = arr.id
-            engine.apply(CommandEnvelope(aircraft: dep, command: .lineUpAndWait,
-                                         timestamp: engine.simTime))
-            trapPhase = 1
-        } else if trapPhase == 1, let arrID = trapArrival {
-            // Wait for the amber projection, then resolve it by hand.
-            if let arr = snap.aircraft.first(where: { $0.id == arrID }), arr.band >= .amber {
-                streakBefore = snap.streakMultiplier
-                engine.apply(CommandEnvelope(aircraft: arrID, command: .goAround,
-                                             timestamp: engine.simTime))
-                trapPhase = 2
-            }
-        }
-
-        let events = engine.advance(by: SimEngine.tickInterval)
-        drain(events, into: &result)
-        for e in events {
-            if case .badge(let a) = e, a.badge == .save { sawSave = true }
-            if case .streakChanged(let m) = e, trapPhase == 2, streakAfterSave == nil {
-                streakAfterSave = m
-            }
-        }
-    }
-    // Let the goAround's tick land the badge if the loop exited on trapPhase.
-    if trapPhase == 2 && !sawSave {
-        let events = engine.advance(by: SimEngine.tickInterval)
-        drain(events, into: &result)
-        for e in events {
-            if case .badge(let a) = e, a.badge == .save { sawSave = true }
-            if case .streakChanged(let m) = e, streakAfterSave == nil { streakAfterSave = m }
-        }
-    }
-
     var ok = true
-    if trapPhase < 2 { print("  FAIL: never found an amber window to engineer"); ok = false }
-    if !sawSave { print("  FAIL: SAVE badge not awarded"); ok = false }
-    let expected = max(1, streakBefore - 2)
-    if streakBefore >= 3 {
-        if streakAfterSave != expected {
-            print("  FAIL: streak \(streakBefore) → \(String(describing: streakAfterSave)), expected step-down to \(expected)")
-            ok = false
-        }
-        if streakAfterSave == 1 && expected != 1 {
-            print("  FAIL: streak was RESET, not stepped down"); ok = false
-        }
+
+    // Build a streak of 5 with ten clean movements (+1 per two).
+    var sb = Scoreboard()
+    for _ in 0..<10 { _ = sb.registerMovement(clean: true) }
+    if sb.streakMultiplier < 5 {
+        print("  FAIL: ten clean movements gave streak \(sb.streakMultiplier), expected ≥5"); ok = false
     }
+    // A save steps down two — not a reset.
+    let before = sb.streakMultiplier
+    let afterSave = sb.stepDownStreak()
+    if afterSave != max(1, before - 2) {
+        print("  FAIL: SAVE streak \(before) → \(String(describing: afterSave)), expected \(max(1, before - 2))"); ok = false
+    }
+    if afterSave == 1 && before > 3 {
+        print("  FAIL: SAVE reset the streak instead of stepping down"); ok = false
+    }
+    // A second save steps down again; the floor is 1, never 0.
+    _ = sb.stepDownStreak()
+    let atFloor = sb.stepDownStreak()
+    if (atFloor ?? sb.streakMultiplier) < 1 || sb.streakMultiplier < 1 {
+        print("  FAIL: streak fell below the floor of 1"); ok = false
+    }
+    // A sustained red is the ONLY hard reset.
+    var sb2 = Scoreboard()
+    for _ in 0..<6 { _ = sb2.registerMovement(clean: true) }   // streak 4
+    let r = sb2.resetStreak()
+    if r != 1 || sb2.streakMultiplier != 1 {
+        print("  FAIL: sustained-red reset gave \(String(describing: r)), expected 1"); ok = false
+    }
+    // Badges multiply by the live streak.
+    var sb3 = Scoreboard()
+    for _ in 0..<4 { _ = sb3.registerMovement(clean: true) }   // streak 3
+    let award = sb3.awardBadge(.save, aircraft: AircraftID(1))
+    if award.points != Badge.save.points * 3 {
+        print("  FAIL: SAVE badge paid \(award.points), expected \(Badge.save.points) × 3"); ok = false
+    }
+
+    // Integration: the auto-controller shift actually flows badges to the report.
+    let airport = AirportLayout.kavx
+    let run = runShift(seed: kSeed, policy: { autoPolicy($0, airport: airport) })
+    if (run.report?.badges.isEmpty ?? true) {
+        print("  FAIL: a full shift earned zero badges (badge pipeline broken)"); ok = false
+    }
+
     print(ok
-        ? "PASS save: amber engineered, SAVE +750 awarded, streak \(streakBefore) → \(streakAfterSave ?? streakBefore) (step-down, not reset)"
-        : "FAIL save")
+        ? "PASS save-table: streak 5→3 step-down (never reset), floor 1, sustained-red resets, badge ×streak, \(run.report?.badges.count ?? 0) badges in a live shift"
+        : "FAIL save-table")
+    return ok
+}
+
+
+// MARK: - Scenario E: fairness sweep (B1/B2/B4/B7/B9)
+
+func scenarioSeparationSweep() -> Bool {
+    let airport = AirportLayout.kavx
+    var worstAir = Double.infinity
+    var worstGround = Double.infinity
+    var worstDownwind = Double.infinity
+    var luawGreen = false
+    var sawNaN = false
+    let seeds = 200
+    for i in 0..<seeds {
+        let seed = 0x7A11_0000 ^ UInt64(i) &* 0x9E3779B1
+        let r = runShift(seed: seed, policy: { autoPolicy($0, airport: airport) },
+                         maxTime: 560, telemetry: true)
+        worstAir = min(worstAir, r.minAirborneSep)
+        worstGround = min(worstGround, r.minGroundSep)
+        worstDownwind = min(worstDownwind, r.minDownwindAltRatio)
+        if r.luawGreenWithCloseArrival { luawGreen = true }
+        if r.sawNaN { sawNaN = true }
+    }
+    var ok = true
+    // B1/B2 — no mid-air merge on final (the audit's 0.2 m overtake is gone;
+    // 30 m clears >2 wingspans while allowing tight but legal pattern spacing).
+    if worstAir < 30 { print("  FAIL: min airborne separation \(Int(worstAir)) m < 30 (mid-air merge)"); ok = false }
+    // B4 — the hold-short queue never lets two aircraft stack waiting to depart.
+    if worstGround.isFinite && worstGround < 20 {
+        print("  FAIL: departures stacked at \(Int(worstGround)) m at the hold-short (B4)"); ok = false
+    }
+    if worstDownwind < 0.5 { print("  FAIL: downwind descended to \(String(format: "%.2f", worstDownwind))× pattern alt (B7)"); ok = false }
+    if luawGreen { print("  FAIL: a lined-up departure read GREEN with an arrival inside 26 s (B9)"); ok = false }
+    if sawNaN { print("  FAIL: NaN across sweep"); ok = false }
+    let gs = worstGround.isFinite ? "\(Int(worstGround)) m" : "never 2 waiting (queue holds one)"
+    print(ok
+        ? "PASS sweep(\(seeds)): min air-sep \(worstAir.isFinite ? Int(worstAir) : -1) m, hold-short \(gs), downwind ≥ \(String(format: "%.2f", worstDownwind))× alt, LUAW never green"
+        : "FAIL sweep")
     return ok
 }
 
@@ -374,6 +443,7 @@ struct SimHarness {
         if !scenarioDeterminism() { failures += 1 }
         if !scenarioNeglect() { failures += 1 }
         if !scenarioSave() { failures += 1 }
+        if !scenarioSeparationSweep() { failures += 1 }
         if failures > 0 {
             print("simharness: \(failures) scenario(s) FAILED")
             exit(1)

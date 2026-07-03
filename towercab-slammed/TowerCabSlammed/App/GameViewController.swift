@@ -23,11 +23,18 @@ final class GameViewController: UIViewController {
     private let uiState = UIState()
     private var lastTimestamp: CFTimeInterval = 0
 
+    // C2: every shift gets a fresh seed; RESTART SAME SEED replays the last.
+    private var lastSeed: UInt64 = 0xCA7A11A
+    private var isPaused = false
+
     // Golden hour: shift starts 17:30, runs 12x (PRD §6.4).
     private let shiftStartHour = 17.5
     private let timeScale = 12.0
 
     private var selectedAircraft: AircraftID?
+    /// C5: the verb set is frozen while a bloom is open; only `enabled` mutates.
+    private var frozenVerbs: [VerbOption] = []
+    private var lastValidAnchor: CGPoint = .zero
 
     override var prefersHomeIndicatorAutoHidden: Bool { true }
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .landscape }
@@ -63,13 +70,13 @@ final class GameViewController: UIViewController {
         scnView.pointOfView = cameraRig.cameraNode
         cameraRig.attachGestures(to: scnView)
 
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
+        scnView.addGestureRecognizer(tap)
+
         // Static cab interior around the eye — parallax comes free with panning.
         let cabInterior = CabInteriorBuilder.build()
         cabInterior.name = "cabInterior"
         world.cabMount.addChildNode(cabInterior)
-
-        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
-        scnView.addGestureRecognizer(tap)
 
         // SwiftUI HUD overlay — transparent areas pass touches through.
         uiState.actions = self
@@ -91,15 +98,17 @@ final class GameViewController: UIViewController {
         applyDebugArguments()
     }
 
-    /// Screenshot/dev harness: -autostart begins a shift immediately;
-    /// -hour <h> pins the sky clock (e.g. -hour 18.3); -ff <s> fast-forwards
-    /// the sim that many seconds after autostart.
+    // MARK: - Debug harness
+
+    /// -autostart, -seed <n>, -ff <s>, -autopilot, -openbloom, -hour <h>,
+    /// -yaw/-pitch/-fov <deg>, -campos x,y,z, -hide a,b, -stats, -nobloom
     private func applyDebugArguments() {
         let args = ProcessInfo.processInfo.arguments
         func value(after flag: String) -> Double? {
             guard let i = args.firstIndex(of: flag), i + 1 < args.count else { return nil }
             return Double(args[i + 1])
         }
+        if let s = value(after: "-seed") { lastSeed = UInt64(s) }
         if let h = value(after: "-hour") {
             debugPinnedHour = h
             world.sky.setTime(hourOfDay: h)
@@ -109,7 +118,12 @@ final class GameViewController: UIViewController {
                               pitchDeg: value(after: "-pitch"),
                               fovDeg: value(after: "-fov"))
         }
-        // -hide token1,token2 hides any node whose name contains a token.
+        if let i = args.firstIndex(of: "-campos"), i + 1 < args.count {
+            let p = args[i + 1].split(separator: ",").compactMap { Double($0) }
+            if p.count == 3 {
+                world.cabMount.position = SCNVector3(p[0], p[1], p[2])
+            }
+        }
         if let i = args.firstIndex(of: "-hide"), i + 1 < args.count {
             let tokens = args[i + 1].lowercased().split(separator: ",").map(String.init)
             world.scene.rootNode.enumerateHierarchy { node, _ in
@@ -119,16 +133,14 @@ final class GameViewController: UIViewController {
                 }
             }
         }
-        if args.contains("-nobloom") {
-            cameraRig.camera?.bloomIntensity = 0
-        }
+        if args.contains("-stats") { scnView.showsStatistics = true }
+        if args.contains("-nobloom") { cameraRig.camera?.bloomIntensity = 0 }
         if args.contains("-autopilot") { autopilotEnabled = true }
         if args.contains("-autostart") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
                 guard let self = self else { return }
-                self.startShift()
+                self.beginShift(seed: self.lastSeed)
                 if let ff = value(after: "-ff"), let engine = self.engine {
-                    // advance() clamps dt (hitch guard) — step fixed ticks.
                     for i in 0..<Int(ff * 10) {
                         for event in engine.advance(by: 0.1) { self.handle(event) }
                         if self.autopilotEnabled && i % 5 == 0 { self.runAutopilot(engine) }
@@ -157,7 +169,7 @@ final class GameViewController: UIViewController {
             return engine.legalCommands(for: st).contains(command)
         }
         let arrivalClose = snapshot.aircraft.contains {
-            $0.phase == .shortFinal || $0.phase == .flare ||
+            $0.phase == .shortFinal || $0.phase == .flare || $0.phase == .rollout ||
             ($0.phase == .finalApproach && $0.clearedToLand)
         }
         for ac in snapshot.aircraft {
@@ -167,13 +179,7 @@ final class GameViewController: UIViewController {
                     engine.apply(CommandEnvelope(aircraft: ac.id, command: .clearedToLand,
                                                  timestamp: engine.simTime))
                 }
-            case .holdingShort:
-                if !arrivalClose, legal(ac.id, .clearedForTakeoff(immediate: false)) {
-                    engine.apply(CommandEnvelope(aircraft: ac.id,
-                                                 command: .clearedForTakeoff(immediate: false),
-                                                 timestamp: engine.simTime))
-                }
-            case .lineUpWait:
+            case .holdingShort, .lineUpWait:
                 if !arrivalClose, legal(ac.id, .clearedForTakeoff(immediate: false)) {
                     engine.apply(CommandEnvelope(aircraft: ac.id,
                                                  command: .clearedForTakeoff(immediate: false),
@@ -200,11 +206,13 @@ final class GameViewController: UIViewController {
 
         guard let engine = engine else { return }
 
-        let events = engine.advance(by: dt)
-        for event in events { handle(event) }
-        if autopilotEnabled && engine.simTime - lastAutopilotAt > 0.6 {
-            lastAutopilotAt = engine.simTime
-            runAutopilot(engine)
+        if !isPaused {
+            let events = engine.advance(by: dt)
+            for event in events { handle(event) }
+            if autopilotEnabled && engine.simTime - lastAutopilotAt > 0.6 {
+                lastAutopilotAt = engine.simTime
+                runAutopilot(engine)
+            }
         }
 
         // Sync entities with interpolated states.
@@ -219,7 +227,7 @@ final class GameViewController: UIViewController {
                 entities[s.id] = e
                 return e
             }()
-            entity.update(s, dt: dt)
+            if !isPaused { entity.update(s, dt: dt) }
         }
         for (id, entity) in entities where !live.contains(id) {
             entity.node.removeFromParentNode()
@@ -227,8 +235,10 @@ final class GameViewController: UIViewController {
         }
 
         // Sky clock: sim time at 12x (unless pinned for screenshots).
-        world.sky.setTime(hourOfDay: debugPinnedHour
-            ?? (shiftStartHour + engine.simTime * timeScale / 3600.0))
+        if !isPaused {
+            world.sky.setTime(hourOfDay: debugPinnedHour
+                ?? (shiftStartHour + engine.simTime * timeScale / 3600.0))
+        }
 
         syncHUD(engine: engine, states: states)
     }
@@ -248,6 +258,9 @@ final class GameViewController: UIViewController {
                 case .red: tone = .alarm
                 }
             }
+            // C8: quantize per-frame floats so strip equality is stable enough
+            // to avoid re-rendering the whole rail 60×/s.
+            let urgency = ac.urgency.map { (($0 * 20).rounded()) / 20 }
             strips.append(StripModel(
                 id: ac.id,
                 callsign: ac.callsign.display,
@@ -257,42 +270,67 @@ final class GameViewController: UIViewController {
                 isArrival: ac.phase.isArrivalFlow,
                 isSelected: ac.id == selectedAircraft,
                 gapSeconds: ac.gapSeconds.map { Int(max(0, $0.rounded())) },
-                urgency: ac.urgency,
-                delayLevel: min(ac.delaySeconds / 120.0, 1.0)))
+                urgency: urgency,
+                delayLevel: ((min(ac.delaySeconds / 120.0, 1.0) * 20).rounded()) / 20))
         }
-        // Rail caps at 9 visible (PRD §2.3); HUD shows "+N" for overflow.
-        uiState.strips = strips
+        if uiState.strips != strips { uiState.strips = strips }
 
-        uiState.score = snapshot.score
-        uiState.streakMultiplier = snapshot.streakMultiplier
-        uiState.shiftPhase = snapshot.shiftPhase
-        let remaining = max(0, Int(snapshot.shiftTimeRemaining.rounded()))
-        uiState.shiftClock = String(format: "%d:%02d", remaining / 60, remaining % 60)
+        if uiState.score != snapshot.score { uiState.score = snapshot.score }
+        if uiState.streakMultiplier != snapshot.streakMultiplier {
+            uiState.streakMultiplier = snapshot.streakMultiplier
+        }
+        if uiState.shiftPhase != snapshot.shiftPhase { uiState.shiftPhase = snapshot.shiftPhase }
+
+        // B22: overtime renders as +m:ss while the last strips resolve.
+        let remaining = snapshot.shiftTimeRemaining
+        let clock: String
+        if remaining >= 0 || snapshot.shiftPhase == .ended {
+            let r = max(0, Int(remaining.rounded()))
+            clock = String(format: "%d:%02d", r / 60, r % 60)
+        } else {
+            let o = Int((-remaining).rounded())
+            clock = String(format: "+%d:%02d", o / 60, o % 60)
+        }
+        if uiState.shiftClock != clock { uiState.shiftClock = clock }
+
         let gust = snapshot.wind.gustKts > snapshot.wind.speedKts + 3
             ? "G\(Int(snapshot.wind.gustKts))" : ""
-        uiState.windText = "\(Int(snapshot.wind.directionDeg))° \(Int(snapshot.wind.speedKts))\(gust)"
-        let clockHour = shiftStartHour + engine.simTime * timeScale / 3600.0
-        uiState.localTimeText = String(format: "%02d:%02d", Int(clockHour) % 24,
-                                       Int(clockHour.truncatingRemainder(dividingBy: 1) * 60))
+        let wind = "\(Int(snapshot.wind.directionDeg))° \(Int(snapshot.wind.speedKts))\(gust)"
+        if uiState.windText != wind { uiState.windText = wind }
 
-        // Keep the bloom anchored to its aircraft.
+        let clockHour = debugPinnedHour ?? (shiftStartHour + engine.simTime * timeScale / 3600.0)
+        let local = String(format: "%02d:%02d", Int(clockHour) % 24,
+                           Int(clockHour.truncatingRemainder(dividingBy: 1) * 60))
+        if uiState.localTimeText != local { uiState.localTimeText = local }
+
+        // Keep the bloom anchored to its aircraft; freeze verbs (C4/C5).
         if let bloom = uiState.bloom {
-            if let s = states.first(where: { $0.id == bloom.aircraftID }) {
+            if let s = states.first(where: { $0.id == bloom.aircraftID }),
+               let st = snapshot.aircraft.first(where: { $0.id == bloom.aircraftID }) {
                 var b = bloom
-                b.anchor = project(s.position)
-                if let st = snapshot.aircraft.first(where: { $0.id == bloom.aircraftID }) {
-                    b.verbs = verbOptions(for: st, engine: engine)
+                if let anchor = projectValid(s.position) {
+                    lastValidAnchor = anchor
+                    b.anchor = anchor
+                } else {
+                    b.anchor = lastValidAnchor
                 }
-                uiState.bloom = b
+                let legal = Set(engine.legalCommands(for: st))
+                let updated = frozenVerbs.map {
+                    VerbOption(command: $0.command, style: $0.style,
+                               enabled: legal.contains($0.command))
+                }
+                if updated != b.verbs { b.verbs = updated }
+                if b != bloom { uiState.bloom = b }
             } else {
                 uiState.bloom = nil
                 selectedAircraft = nil
             }
         }
 
-        // Expire toasts.
         let now = Date()
-        uiState.toasts.removeAll { now.timeIntervalSince($0.createdAt) > 2.6 }
+        if uiState.toasts.contains(where: { now.timeIntervalSince($0.createdAt) > 2.6 }) {
+            uiState.toasts.removeAll { now.timeIntervalSince($0.createdAt) > 2.6 }
+        }
     }
 
     private func handle(_ event: SimEvent) {
@@ -301,68 +339,101 @@ final class GameViewController: UIViewController {
             let speaker: String
             let isTower: Bool
             switch call.speaker {
-            case .tower: speaker = "TWR"; isTower = true
+            case .tower:
+                speaker = call.speakerLabel.isEmpty ? "TWR" : call.speakerLabel
+                isTower = true
             case .pilot(let id):
-                speaker = engine?.current.aircraft.first(where: { $0.id == id })?.callsign.display ?? "?"
+                // B17: prefer the emit-time label — the aircraft may be gone.
+                speaker = call.speakerLabel.isEmpty
+                    ? (engine?.current.aircraft.first(where: { $0.id == id })?.callsign.display ?? "—")
+                    : call.speakerLabel
                 isTower = false
             }
             uiState.radioLog.append(RadioLine(speaker: speaker, text: call.text, isTower: isTower))
-            if uiState.radioLog.count > 5 { uiState.radioLog.removeFirst() }
+            if uiState.radioLog.count > 8 { uiState.radioLog.removeFirst() }
         case .badge(let award):
-            uiState.toasts.append(BadgeToast(
+            pushToast(BadgeToast(
                 text: "\(award.badge.label) +\(award.points)",
                 isSave: award.badge == .save || award.badge == .lateSave))
         case .streakChanged(let m):
             uiState.streakMultiplier = m
         case .selfPreservation(_, let penalty):
-            uiState.toasts.append(BadgeToast(text: "PILOT'S CALL \(penalty)", isSave: false))
+            pushToast(BadgeToast(text: "PILOT'S CALL \(penalty)", isSave: false))
         case .shiftEnded(let report):
             uiState.screen = .score(ShiftReportBox(report))
         case .aircraftRemoved(let id):
-            if selectedAircraft == id { selectedAircraft = nil; uiState.bloom = nil }
+            if selectedAircraft == id { closeBloom() }
         default:
             break
         }
     }
 
+    /// C20: newest first, hard cap 3.
+    private func pushToast(_ toast: BadgeToast) {
+        uiState.toasts.insert(toast, at: 0)
+        if uiState.toasts.count > 3 { uiState.toasts.removeLast(uiState.toasts.count - 3) }
+    }
+
     // MARK: - Selection & verbs
 
     @objc private func handleTap(_ g: UITapGestureRecognizer) {
-        guard let engine = engine else { return }
+        guard engine != nil else { return }
         let p = g.location(in: scnView)
+        // C18: forgiving picking — probe a small cross around the touch.
+        let probes = [CGPoint.zero, CGPoint(x: 22, y: 0), CGPoint(x: -22, y: 0),
+                      CGPoint(x: 0, y: 22), CGPoint(x: 0, y: -22)]
+        for off in probes {
+            let q = CGPoint(x: p.x + off.x, y: p.y + off.y)
+            if let id = aircraftHit(at: q) {
+                openBloom(for: id)
+                return
+            }
+        }
+        bloomDismissed()   // C28: one dismissal path
+    }
+
+    private func aircraftHit(at point: CGPoint) -> AircraftID? {
         // Category 1 only — cab interior/glass is category 2 and must not eat taps.
-        let hits = scnView.hitTest(p, options: [.searchMode: SCNHitTestSearchMode.all.rawValue,
-                                                .categoryBitMask: 1,
-                                                .ignoreHiddenNodes: true])
-        var tappedID: AircraftID?
+        let hits = scnView.hitTest(point, options: [.searchMode: SCNHitTestSearchMode.all.rawValue,
+                                                    .categoryBitMask: 1,
+                                                    .ignoreHiddenNodes: true])
         for hit in hits {
             var node: SCNNode? = hit.node
             while let n = node {
                 if let name = n.name, name.hasPrefix("AC"), let raw = Int(name.dropFirst(2)) {
-                    tappedID = AircraftID(raw)
-                    break
+                    return AircraftID(raw)
                 }
                 node = n.parent
             }
-            if tappedID != nil { break }
         }
-        if let id = tappedID {
-            openBloom(for: id)
-        } else {
-            uiState.bloom = nil
-            selectedAircraft = nil
-        }
+        return nil
     }
 
     private func openBloom(for id: AircraftID) {
         guard let engine = engine,
               let state = engine.current.aircraft.first(where: { $0.id == id }) else { return }
         selectedAircraft = id
+        frozenVerbs = verbOptions(for: state, engine: engine)
+
+        // C4: if the aircraft is off-screen, swing the camera to it first; the
+        // bloom rides along as the aircraft enters frame (no cuts, PRD law).
+        if !cameraRig.isOnScreen(state.position, in: scnView) {
+            cameraRig.frame(worldPoint: state.position,
+                            targetSpan: state.kind.wingspanMeters)
+        }
+        let anchor = projectValid(state.position) ?? lastValidAnchor
+        lastValidAnchor = anchor
         uiState.bloom = BloomModel(
             aircraftID: id,
             callsign: state.callsign.display,
-            anchor: project(state.position),
-            verbs: verbOptions(for: state, engine: engine))
+            anchor: anchor,
+            verbs: frozenVerbs)
+    }
+
+    private func closeBloom() {
+        uiState.bloom = nil
+        selectedAircraft = nil
+        frozenVerbs = []
     }
 
     private func verbOptions(for state: AircraftState, engine: SimEngine) -> [VerbOption] {
@@ -373,13 +444,32 @@ final class GameViewController: UIViewController {
             case .holdPosition, .clearedForTakeoff(immediate: true): style = .caution
             default: style = .standard
             }
-            return VerbOption(command: cmd, style: style)
+            return VerbOption(command: cmd, style: style, enabled: true)
         }
     }
 
-    private func project(_ world: V3) -> CGPoint {
+    /// C4: nil when behind the camera or far outside the view.
+    private func projectValid(_ world: V3) -> CGPoint? {
         let v = scnView.projectPoint(SCNVector3(world.x, world.y, world.z))
-        return CGPoint(x: CGFloat(v.x), y: CGFloat(v.y))
+        guard v.z > 0 && v.z < 1 else { return nil }
+        let p = CGPoint(x: CGFloat(v.x), y: CGFloat(v.y))
+        guard scnView.bounds.insetBy(dx: -120, dy: -120).contains(p) else { return nil }
+        return p
+    }
+
+    private func beginShift(seed: UInt64) {
+        lastSeed = seed
+        entities.values.forEach { $0.node.removeFromParentNode() }
+        entities.removeAll()
+        engine = SimEngine(airport: airport, seed: seed)
+        isPaused = false
+        uiState.paused = false
+        uiState.screen = .playing
+        uiState.radioLog = []
+        uiState.toasts = []
+        closeBloom()
+        lastTimestamp = 0
+        lastAutopilotAt = -1
     }
 }
 
@@ -388,37 +478,44 @@ final class GameViewController: UIViewController {
 extension GameViewController: GameActions {
 
     func startShift() {
-        entities.values.forEach { $0.node.removeFromParentNode() }
-        entities.removeAll()
-        engine = SimEngine(airport: airport, seed: 0xCA7A11A)
-        uiState.screen = .playing
-        uiState.radioLog = []
-        uiState.toasts = []
-        uiState.bloom = nil
-        selectedAircraft = nil
-        lastTimestamp = 0
+        beginShift(seed: UInt64.random(in: 1...UInt64.max))
     }
 
-    func restartShift() { startShift() }
+    func restartShift() {
+        beginShift(seed: lastSeed)
+    }
+
+    func togglePause() {
+        guard engine != nil else { return }
+        isPaused.toggle()
+        uiState.paused = isPaused
+    }
 
     func stripTapped(_ id: AircraftID) {
-        openBloom(for: id)
+        // C1: first tap selects + opens the bloom instantly; a second tap on
+        // the already-selected strip answers "where is he" by framing it.
+        if id == selectedAircraft {
+            if let s = engine?.renderStates(alpha: 1).first(where: { $0.id == id }) {
+                cameraRig.frame(worldPoint: s.position,
+                                targetSpan: Double(s.kind.wingspanMeters))
+            }
+        } else {
+            openBloom(for: id)
+        }
     }
 
     func stripDoubleTapped(_ id: AircraftID) {
         guard let s = engine?.renderStates(alpha: 1).first(where: { $0.id == id }) else { return }
-        cameraRig.frame(worldPoint: s.position)
+        cameraRig.frame(worldPoint: s.position, targetSpan: Double(s.kind.wingspanMeters))
     }
 
     func verbSelected(_ id: AircraftID, command: Command) {
         guard let engine = engine else { return }
         engine.apply(CommandEnvelope(aircraft: id, command: command, timestamp: engine.simTime))
-        uiState.bloom = nil
-        selectedAircraft = nil
+        closeBloom()
     }
 
     func bloomDismissed() {
-        uiState.bloom = nil
-        selectedAircraft = nil
+        closeBloom()
     }
 }

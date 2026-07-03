@@ -58,6 +58,27 @@ final class Aircraft {
     var touchdownStation: Double = 0 // chosen at spawn (determinism)
     var exitStation: Double = 0      // rollout target, picked at touchdown
     var exitIsPreferred = false
+    /// B15 — chosen exit is the earliest THIS type could physically make
+    /// under expedite braking (the honest SLICK EXIT condition).
+    var exitIsEarliestReachable = false
+    var exitTaxiwayName: String? = nil
+    /// B8 — last commit-shaped command (LUAW / takeoff) put THIS aircraft on
+    /// the runway; a departure whose commit is newer than an arrival's is the
+    /// player's own manufactured gap and pays nothing.
+    var lastCommitAt: Double = -100
+    /// B8 — when this arrival became committed (cleared to land / short final).
+    var committedAt: Double = -100
+    /// B6 — a pilot self-preservation bail fires at most once per aircraft.
+    var selfPresFired = false
+    /// B16 — the specific arrival a TIGHT GAP was armed against.
+    var tightGapArmedArrival: AircraftID? = nil
+    /// B21 — nth overflow arrival with no free apron spot (parking offset).
+    var overflowIndex = 0
+    /// B18 — go-around issued from the pattern rejoins the downwind directly.
+    var gaFromPattern = false
+    /// B2/merge — staggered downwind station a go-around rejoins at, so two
+    /// rejoining aircraft never stack on the entry point.
+    var rejoinEntryStation: Double = .nan
     var apronSpot: Int = -1
     var preRollPause: Double = 0     // seconds left before brake release
     var lineupComplete = false
@@ -123,7 +144,11 @@ final class Aircraft {
 
     /// Follow `route` from `routeIndex`. Returns true when the last point is
     /// reached. Turns are heading-rate-limited so taxi corners look alive.
-    func followRoute(speed target: Double, accel: Double, turnRate: Double, dt: Double) -> Bool {
+    /// `laneOffset` shifts the tracked line to the right of travel — a taxi
+    /// keep-right convention so opposing traffic passes side-by-side rather
+    /// than driving through each other on a shared centerline (B4).
+    func followRoute(speed target: Double, accel: Double, turnRate: Double,
+                     laneOffset: Double = 0, dt: Double) -> Bool {
         guard routeIndex < route.count else { return true }
         var wp = route[routeIndex]
         var remaining = simd_length(wp - pos2)
@@ -142,7 +167,22 @@ final class Aircraft {
         if isLast { desired = min(desired, max(1.2, remaining * 0.55)) }
         else if remaining < 14 { desired = min(desired, max(2.5, target * 0.55)) }
         driveSpeed(toward: desired, accel: accel, decel: accel * 1.6, dt: dt)
-        steer(toPoint: wp, maxRate: turnRate, dt: dt)
+        var aim = wp
+        if laneOffset != 0, !isLast {
+            // Track a line offset to the RIGHT of the segment, held the whole
+            // way (not a vanishing steer nudge): aim at a lookahead point on the
+            // offset line so opposing traffic passes side-by-side.
+            let segStart = routeIndex > 0 ? route[routeIndex - 1] : pos2
+            let seg = wp - segStart
+            if simd_length(seg) > 0.5 {
+                let segDir = simd_normalize(seg)
+                let right = V2(segDir.y, -segDir.x)
+                let along = simd_dot(pos2 - segStart, segDir)
+                let look = segStart + segDir * min(along + 12, simd_length(seg))
+                aim = look + right * laneOffset
+            }
+        }
+        steer(toPoint: aim, maxRate: turnRate, dt: dt)
         integrate(dt: dt)
         return false
     }

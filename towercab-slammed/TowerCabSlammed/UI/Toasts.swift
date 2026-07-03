@@ -10,8 +10,10 @@ struct ToastStackView: View {
     let toasts: [BadgeToast]
 
     var body: some View {
+        // C20 — cap at 3 (oldest dropped), newest minted on TOP, stack grows down.
+        let shown = Array(toasts.suffix(3).reversed())
         VStack(spacing: 10) {
-            ForEach(toasts) { toast in
+            ForEach(shown) { toast in
                 ToastStamp(toast: toast)
                     .transition(.asymmetric(
                         insertion: .scale(scale: 0.8).combined(with: .opacity),

@@ -121,6 +121,7 @@ struct StartScreenView: View {
                 }
         }
         .buttonStyle(PressScaleButtonStyle())
+        .accessibilityIdentifier("startShift")
     }
 }
 

@@ -2,25 +2,42 @@ import SwiftUI
 
 // =============================================================================
 // TopBar — one slim etched-glass strip across the top.
-// Left: station + local time + wind. Center: shift clock + phase chip.
-// Right: score + streak meter. Purely informational — never captures touches.
+// Left: pause + station + local time + wind. Center: shift clock + phase chip.
+// Right: score + streak meter. Info blocks never capture touches; the pause
+// glyph is the bar's only control (C12).
 // =============================================================================
 
 struct TopBarView: View {
     @ObservedObject var state: UIState
 
     var body: some View {
-        HStack(alignment: .center) {
-            stationBlock
+        HStack(alignment: .center, spacing: 12) {
+            pauseButton
+            stationBlock.allowsHitTesting(false)
             Spacer(minLength: 12)
-            scoreBlock
+            scoreBlock.allowsHitTesting(false)
         }
-        .overlay(clockBlock)                     // keeps the clock truly centered
-        .padding(.horizontal, 18)
-        .padding(.vertical, 9)
+        .overlay(clockBlock.allowsHitTesting(false))   // keeps the clock truly centered
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
         .etchedGlass(cornerRadius: 14)
         .frame(maxWidth: 960)
-        .allowsHitTesting(false)
+    }
+
+    // MARK: Pause (C12 — PRD launch gate)
+
+    private var pauseButton: some View {
+        Button {
+            state.actions?.togglePause()
+        } label: {
+            Image(systemName: state.paused ? "play.fill" : "pause.fill")
+                .font(.system(size: 17, weight: .bold))
+                .foregroundStyle(Theme.warmWhite.opacity(0.85))
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PressScaleButtonStyle())
+        .accessibilityIdentifier("pauseButton")
     }
 
     // MARK: Left — station identity
@@ -50,8 +67,24 @@ struct TopBarView: View {
                 .foregroundStyle(Theme.warmWhite)
                 .contentTransition(.numericText(countsDown: true))
                 .animation(Theme.springFast, value: state.shiftClock)
-            phaseChip
+                .opacity(state.paused ? 0.35 : 1.0)   // C12 — held breath, not alarm
+            if state.paused { pausedChip } else { phaseChip }
         }
+        .animation(Theme.springFast, value: state.paused)
+    }
+
+    private var pausedChip: some View {
+        Text("PAUSED")
+            .font(Theme.display(15, .heavy))
+            .tracking(1.8)
+            .foregroundStyle(Theme.warmWhite.opacity(0.8))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 3)
+            .background(
+                Capsule().fill(Color.white.opacity(0.10))
+                    .overlay(Capsule().strokeBorder(Color.white.opacity(0.35), lineWidth: 1))
+            )
+            .transition(.opacity)
     }
 
     @ViewBuilder private var phaseChip: some View {
