@@ -1,12 +1,23 @@
-/*
-!/.gitignore
-!/README.md
-!/towercab-slammed/
-!/towercab-slammed/**
+# TowerCab repo — only the game (towercab-slammed/) is tracked.
 
-# TowerCab: Slammed build artifacts
-towercab-slammed/DerivedData/
+# macOS
+.DS_Store
+
+# Xcode / build artifacts
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# TowerCab build artifacts
 towercab-slammed/build/
+towercab-slammed/DerivedData/
 towercab-slammed/*.xcodeproj/xcuserdata/
 towercab-slammed/*.xcodeproj/project.xcworkspace/xcuserdata/
-
