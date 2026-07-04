@@ -149,12 +149,31 @@ func buildCaravan(livery: Livery) -> CraftParts {
         fus.position.y = cy
         root.addChildNode(fus)
 
-        // Belly cargo pod — the Caravan's signature underslung fairing.
-        let pod = latheNode([(-3.6, 0.05), (-3.2, 0.30), (-1.6, 0.42), (0.4, 0.42),
-                             (2.2, 0.34), (3.4, 0.12)],
+        // Asymmetric cowl detail: a LARGER intake scoop left of the spinner, a
+        // SMALLER one on the right, plus a right-side exhaust stack — the
+        // Caravan's signature unequal-intake nose. (blueprint distinctiveFeature)
+        let intakeMat = pbrMaterial(UIColor(white: 0.05, alpha: 1), roughness: 0.4)
+        let bigScoop = SCNNode(geometry: SCNBox(width: 0.26, height: 0.20, length: 0.5, chamferRadius: 0.06))
+        bigScoop.geometry?.materials = [intakeMat]
+        bigScoop.position = SCNVector3(-0.30, cy + 0.02, -6.05)   // left = larger
+        root.addChildNode(bigScoop)
+        let smallScoop = SCNNode(geometry: SCNBox(width: 0.18, height: 0.15, length: 0.42, chamferRadius: 0.05))
+        smallScoop.geometry?.materials = [intakeMat]
+        smallScoop.position = SCNVector3(0.28, cy + 0.02, -6.0)   // right = smaller
+        root.addChildNode(smallScoop)
+        let exhaust = SCNNode(geometry: SCNCylinder(radius: 0.07, height: 0.5))
+        exhaust.geometry?.materials = [pbrMaterial(UIColor(white: 0.10, alpha: 1), roughness: 0.5, metalness: 0.6)]
+        exhaust.eulerAngles.x = .pi / 2
+        exhaust.position = SCNVector3(0.42, cy - 0.18, -5.5)   // right-side stack
+        root.addChildNode(exhaust)
+
+        // Belly cargo pod — the Caravan's signature underslung fairing, running
+        // most of the fuselage length, streamlined and low-slung.
+        let pod = latheNode([(-4.6, 0.04), (-4.2, 0.26), (-2.8, 0.40), (-1.0, 0.44),
+                             (0.8, 0.44), (2.6, 0.36), (3.8, 0.20), (4.5, 0.06)],
                             segments: 18, material: bodyMat)
-        pod.position = SCNVector3(0, 0.70, -0.6)
-        pod.scale = SCNVector3(1.0, 0.6, 1.0)   // squashed vertically to hug belly
+        pod.position = SCNVector3(0, 0.62, -0.9)
+        pod.scale = SCNVector3(1.0, 0.55, 1.0)   // squashed vertically to hug belly
         root.addChildNode(pod)
 
         // Tall glasshouse cabin (utility greenhouse).
@@ -332,10 +351,11 @@ func buildKingAir350(livery: Livery) -> CraftParts {
                                 segments: 20, material: nacMat)
             nac.position = SCNVector3(nacX * s, nacY, -0.55)
             root.addChildNode(nac)
-            // Chin intake scoop under the spinner.
-            let scoop = SCNNode(geometry: SCNBox(width: 0.34, height: 0.20, length: 0.4, chamferRadius: 0.08))
+            // Racetrack "pitot-type" intake — wider than tall, low near the
+            // spinner (the modern 350 cowl intake). (blueprint distinctiveFeature)
+            let scoop = SCNNode(geometry: SCNBox(width: 0.42, height: 0.16, length: 0.34, chamferRadius: 0.08))
             scoop.geometry?.materials = [intakeMat]
-            scoop.position = SCNVector3(nacX * s, nacY - 0.34, -2.25)
+            scoop.position = SCNVector3(nacX * s, nacY - 0.30, -2.28)
             root.addChildNode(scoop)
         }
 
@@ -355,22 +375,37 @@ func buildKingAir350(livery: Livery) -> CraftParts {
             root.addChildNode(cant)
         }
 
-        // Upright swept fin with dorsal fillet.
+        // T-TAIL — the King Air 350 signature. A tall swept vertical fin carries
+        // the horizontal stabilizer at its TOP (~2.3 m up), with a small aft
+        // VENTRAL FIN under the tailcone. (blueprint: T-tail + ventral fin.)
+        let finTop: Float = 2.35
         let finPath = UIBezierPath()
         finPath.move(to: CGPoint(x: 0.08, y: 0))
-        finPath.addLine(to: CGPoint(x: 0.40, y: 2.30))
-        finPath.addQuadCurve(to: CGPoint(x: 1.05, y: 2.42), controlPoint: CGPoint(x: 0.58, y: 2.48))
-        finPath.addQuadCurve(to: CGPoint(x: 2.85, y: 0.0), controlPoint: CGPoint(x: 1.9, y: 0.55))
+        finPath.addLine(to: CGPoint(x: 1.05, y: CGFloat(finTop)))
+        finPath.addQuadCurve(to: CGPoint(x: 1.95, y: CGFloat(finTop) - 0.06),
+                             controlPoint: CGPoint(x: 1.55, y: CGFloat(finTop) + 0.10))
+        finPath.addQuadCurve(to: CGPoint(x: 2.85, y: 0.0), controlPoint: CGPoint(x: 2.2, y: 0.5))
         finPath.close()
-        let fin = finNode(path: finPath, thickness: 0.15, material: tailMat)
+        let fin = finNode(path: finPath, thickness: 0.16, material: tailMat)
         fin.position = SCNVector3(0, cy + 0.10, 6.75)
         root.addChildNode(fin)
 
-        // Cabin-class swept horizontal stab, mounted partway up the fin.
-        let stab = wingNode(span: 5.6, rootChord: 1.35, tipChord: 0.75, sweep: 0.55,
+        // Horizontal stab ATOP the fin (T-tail), swept, spanning the fin top.
+        let stab = wingNode(span: 5.6, rootChord: 1.3, tipChord: 0.72, sweep: 0.6,
                             thickness: 0.12, material: bodyMat)
-        stab.position = SCNVector3(0, cy + 0.55, 6.55)
+        stab.position = SCNVector3(0, cy + 0.10 + finTop, 6.15)
         root.addChildNode(stab)
+
+        // Small aft ventral fin under the tailcone (T-tail King Air trait).
+        let ventPath = UIBezierPath()
+        ventPath.move(to: CGPoint(x: 0.10, y: 0))
+        ventPath.addLine(to: CGPoint(x: 0.30, y: -0.55))
+        ventPath.addLine(to: CGPoint(x: 1.30, y: -0.62))
+        ventPath.addLine(to: CGPoint(x: 1.60, y: 0.0))
+        ventPath.close()
+        let vent = finNode(path: ventPath, thickness: 0.12, material: tailMat)
+        vent.position = SCNVector3(0, cy - 0.30, 6.65)
+        root.addChildNode(vent)
         if livery == .meridianVIP {
             let accentMat = pbrMaterial(pal.accent, roughness: 0.25, metalness: 0.7)
             let crest = SCNNode(geometry: SCNBox(width: 0.22, height: 0.5, length: 0.36, chamferRadius: 0.06))
@@ -411,15 +446,16 @@ func buildKingAir350(livery: Livery) -> CraftParts {
         flaps.append(Surface(node: fl, sign: 1))
         body.addChildNode(fl)
     }
-    // Elevator on the stab TE (stab.z + rootChord = 6.55 + 1.35 = 7.9).
+    // Elevator on the T-tail stab TE (atop the fin: stab.y = cy+0.10+2.35,
+    // stab.z + rootChord = 6.15 + 1.3 = 7.45).
     var elevator: [Surface] = []
     let elev = hingedSurfaceNode(span: 5.4, chord: 0.5, thickness: 0.10, material: surfBodyMat)
-    elev.position = SCNVector3(0, cy + 0.55, 7.9)
+    elev.position = SCNVector3(0, cy + 0.10 + 2.35, 7.45)
     elevator.append(Surface(node: elev, sign: 1))
     body.addChildNode(elev)
     // Rudder at the fin TE (finNode extends forward; TE near node.z 6.75).
     var rudder: [Surface] = []
-    let rud = hingedRudderNode(height: 2.05, chord: 0.5, thickness: 0.14, material: tailMat)
+    let rud = hingedRudderNode(height: 2.25, chord: 0.5, thickness: 0.14, material: tailMat)
     rud.position = SCNVector3(0, cy + 0.10, 6.75)
     rudder.append(Surface(node: rud, sign: 1))
     body.addChildNode(rud)
@@ -461,15 +497,17 @@ func buildKingAir350(livery: Livery) -> CraftParts {
     body.addChildNode(nose.pivot)
     for w in nose.wheels { wheels.append((w, 0.26)) }
     gear.append((nose.pivot, SCNVector3(1.7, 0, 0)))
-    // Mains under the nacelles, fold inboard.
+    // Mains under the nacelles, fold inboard. Pivot y = nacY-0.30; strut sized
+    // so contact (pivot - strut - radius) lands at y ≈ 0.
+    let mainPivotY: Float = nacY - 0.30
+    let mainStrutLen: Float = mainPivotY - 0.34   // wheel radius ⇒ contact ≈ 0
     for s in [Float(-1), Float(1)] {
-        let main = kingGearLeg(pivotAt: SCNVector3(nacX * s, nacY - 0.30, -0.9), strutLen: 0.86,
+        let main = kingGearLeg(pivotAt: SCNVector3(nacX * s, mainPivotY, -0.9), strutLen: mainStrutLen,
                                wheelRadius: 0.34, wheelWidth: 0.16, twin: false)
         body.addChildNode(main.pivot)
         gear.append((main.pivot, SCNVector3(0, 0, 1.75 * -s)))
         for w in main.wheels { wheels.append((w, 0.34)) }
         oleos.append((main.oleo, 0, 0.10))
-        // Contact patch at ground: nacY-0.30 - 0.86 - 0.34 ≈ 0.05.
         gearContacts.append(SCNVector3(nacX * s, 0, -0.9))
     }
 
@@ -478,8 +516,8 @@ func buildKingAir350(livery: Livery) -> CraftParts {
     let kit = makeLightKit(on: body, spec: LightSpec(
         navLeft: SCNVector3(-8.85, wingY, -0.8),
         navRight: SCNVector3(8.85, wingY, -0.8),
-        tail: SCNVector3(0, cy + 0.10, 6.85),
-        beacon: SCNVector3(0, cy + 2.5, 6.2),
+        tail: SCNVector3(0, cy + 0.10 + 2.35, 7.35),   // atop the T-tail
+        beacon: SCNVector3(0, cy + 2.55, 6.2),
         landing: SCNVector3(0, wingY - 0.1, -1.0)))
     return CraftParts(body: body, propGroup: twin.spinNode, blades: twin.blades,
                       blurDisc: twin.blurDisc, fanGroups: [], heatWash: [],
@@ -547,7 +585,10 @@ func buildTwinOtter(livery: Livery) -> CraftParts {
             }
         }
 
-        // Nacelle shells (static) slung under the wing, one per side.
+        // Nacelle shells (static) integrated into the wing LEADING EDGE,
+        // projecting forward, one per side — NOT slung under. Each has an
+        // OVERSIZED lower air intake nearly as big as the spinner (the Twin
+        // Otter's key recognition cue) and a single bracing strut behind it.
         let nacMat = pbrMaterial(pal.body, roughness: max(0.15, pal.roughness - 0.05),
                                  metalness: min(1, pal.metalness + 0.1))
         let intakeMat = pbrMaterial(UIColor(white: 0.05, alpha: 1), roughness: 0.4)
@@ -557,35 +598,54 @@ func buildTwinOtter(livery: Livery) -> CraftParts {
                                 segments: 18, material: nacMat)
             nac.position = SCNVector3(nacX * s, nacY, 0.15)
             root.addChildNode(nac)
-            let scoop = SCNNode(geometry: SCNBox(width: 0.32, height: 0.18, length: 0.38, chamferRadius: 0.07))
-            scoop.geometry?.materials = [intakeMat]
-            scoop.position = SCNVector3(nacX * s, nacY - 0.30, -1.4)
+            // Oversized lower intake — a big rounded scoop under the spinner,
+            // nearly the spinner's diameter (Twin Otter signature).
+            let scoop = latheNode([(-0.55, 0.06), (-0.35, 0.28), (0.0, 0.34), (0.35, 0.30), (0.60, 0.10)],
+                                  segments: 16, material: intakeMat)
+            scoop.scale = SCNVector3(1.0, 0.85, 1.0)
+            scoop.position = SCNVector3(nacX * s, nacY - 0.34, -1.55)
             root.addChildNode(scoop)
         }
 
-        // Wing lift struts to ~40% semi-span, plus jury struts.
+        // Wing lift strut per side to ~40% semi-span, plus a single bracing
+        // strut BEHIND each nacelle (Twin Otter distinctiveFeature).
         for s in [Float(-1), Float(1)] {
             root.addChildNode(strutNode(from: SCNVector3(0.82 * s, cy + 0.30, -0.55),
                                         to: SCNVector3(4.0 * s, wingY - 0.10, -0.6),
                                         radius: 0.05, material: bodyMat))
+            // Bracing strut aft of each nacelle, fuselage-lower to wing.
+            root.addChildNode(strutNode(from: SCNVector3(nacX * s, nacY - 0.30, 0.9),
+                                        to: SCNVector3(nacX * s, wingY - 0.05, 0.6),
+                                        radius: 0.035, material: bodyMat))
         }
 
-        // Tall single fin with dorsal fillet (the Twin Otter's boxy tail).
+        // CRUCIFORM tail (Twin Otter signature): a tall, square-TOPPED fin with
+        // the horizontal stabilizer mounted PARTWAY UP the fin (not at the top,
+        // not on the fuselage). Small dorsal fillet forward.
+        let stabH: Float = 1.55   // stab attach height up the fin
+        let finTop: Float = 2.55
         let finPath = UIBezierPath()
         finPath.move(to: CGPoint(x: 0.06, y: 0))
-        finPath.addLine(to: CGPoint(x: 0.20, y: 2.35))
-        finPath.addQuadCurve(to: CGPoint(x: 1.05, y: 2.48), controlPoint: CGPoint(x: 0.42, y: 2.55))
-        finPath.addQuadCurve(to: CGPoint(x: 1.75, y: 0.90), controlPoint: CGPoint(x: 1.55, y: 1.7))
-        finPath.addQuadCurve(to: CGPoint(x: 3.5, y: 0.0), controlPoint: CGPoint(x: 2.2, y: 0.06))
+        finPath.addLine(to: CGPoint(x: 0.30, y: CGFloat(finTop)))
+        finPath.addLine(to: CGPoint(x: 1.15, y: CGFloat(finTop)))          // squared top
+        finPath.addLine(to: CGPoint(x: 1.35, y: CGFloat(finTop) - 0.30))
+        finPath.addQuadCurve(to: CGPoint(x: 1.95, y: 0.95), controlPoint: CGPoint(x: 1.80, y: 1.8))
+        finPath.addQuadCurve(to: CGPoint(x: 3.5, y: 0.0), controlPoint: CGPoint(x: 2.3, y: 0.06))
         finPath.close()
         let fin = finNode(path: finPath, thickness: 0.15, material: tailMat)
         fin.position = SCNVector3(0, cy + 0.02, 7.35)
         root.addChildNode(fin)
 
+        // Stab mounted partway up the fin (cruciform), braced by small struts.
         let stab = wingNode(span: 6.3, rootChord: 1.3, tipChord: 0.9, sweep: 0.1,
                             thickness: 0.11, material: bodyMat)
-        stab.position = SCNVector3(0, cy + 0.10, 7.2)
+        stab.position = SCNVector3(0, cy + 0.02 + stabH, 7.05)
         root.addChildNode(stab)
+        for s in [Float(-1), Float(1)] {
+            root.addChildNode(strutNode(from: SCNVector3(1.4 * s, cy + 0.02 + stabH - 0.05, 6.6),
+                                        to: SCNVector3(0.18 * s, cy + 0.02, 7.3),
+                                        radius: 0.03, material: tailMat))
+        }
 
         // Fixed tricycle gear (no fairings — bare STOL legs). Struts static,
         // main WHEELS live.
@@ -624,8 +684,8 @@ func buildTwinOtter(livery: Livery) -> CraftParts {
         ailChord: 0.44, ailSpan: 3.0, ailInboard: 5.8,
         flapChord: 0.5, flapSpan: 4.4, flapInboard: 0.9,
         surfThickness: 0.11,
-        stabY: cy + 0.10, stabTE_Z: 7.2, stabHalfSpan: 3.15, elevChord: 0.44,
-        finBaseY: cy + 0.02, finTE_Z: 7.3, rudderHeight: 2.3, rudderChord: 0.5,
+        stabY: cy + 0.02 + 1.55, stabTE_Z: 8.35, stabHalfSpan: 3.15, elevChord: 0.44,
+        finBaseY: cy + 0.02, finTE_Z: 7.3, rudderHeight: 2.5, rudderChord: 0.5,
         mainX: 1.55, mainZ: -0.25, mainTopY: 0.72,
         mainRadius: 0.34, mainWidth: 0.18, mainStrutR: 0.0),
         bodyMat: bodyMat, tailMat: tailMat, tire: tire, hub: hub, strutMat: strutMat)
@@ -675,16 +735,18 @@ func buildDC3(livery: Livery) -> CraftParts {
         let tire = pbrMaterial(UIColor(white: 0.08, alpha: 1), roughness: 0.9)
         let hub = pbrMaterial(UIColor(white: 0.7, alpha: 1), roughness: 0.4, metalness: 0.6)
 
-        // Rounded retro fuselage, 19.7 m nose-to-tail. Slight nose-up rake baked
-        // in by lifting the aft profile a touch relative to the tall nose stance.
-        let fus = latheNode([(-9.85, 0.14), (-9.55, 0.52), (-8.50, 0.84), (-6.90, 1.06),
-                             (-4.40, 1.16), (-1.00, 1.16), (2.60, 1.06), (5.60, 0.82),
-                             (8.10, 0.46), (9.85, 0.10)],
-                            segments: 32,
+        // Fat, near-circular retro fuselage — the DC-3 'dolphin' torpedo, 19.7 m
+        // nose-to-tail. Deepest through the cockpit/forward cabin, tapering to a
+        // slim UPSWEPT tailcone that carries the tailwheel. The shell stays LEVEL
+        // in body space so live parts (props/gear/surfaces) never float — the
+        // nose-high taildragger stance comes from tall forward mains + a short
+        // aft tailwheel, not from rotating the shell.
+        let fus = latheNode([(-9.85, 0.16), (-9.50, 0.58), (-8.40, 0.92), (-6.80, 1.16),
+                             (-4.30, 1.24), (-0.80, 1.24), (2.80, 1.10), (5.70, 0.80),
+                             (8.10, 0.44), (9.85, 0.12)],
+                            segments: 34,
                             material: fuselageMaterial(kind: .dc3, livery: livery))
         fus.position.y = cy
-        // Nose-up taildragger rake: pitch the whole shell a few degrees.
-        fus.eulerAngles.x = -0.06
         root.addChildNode(fus)
 
         // Cockpit windscreen band.
@@ -698,23 +760,47 @@ func buildDC3(livery: Livery) -> CraftParts {
         windowBand.position = SCNVector3(0, cy + 0.5, -2.2)
         root.addChildNode(windowBand)
 
-        // Low wing (29.0 m span), gently tapered, dihedral read via the tips.
+        // Low wing (29.0 m span): a broad tapered center panel. The classic
+        // DC-3 gull look — near-flat center section, dihedralled outer panels —
+        // is read via raised, outboard-canted tip caps below.
         let wing = wingNode(span: 29.0, rootChord: 3.6, tipChord: 1.4, sweep: 1.2,
                             thickness: 0.30, material: bodyMat)
         wing.position = SCNVector3(0, wingY, 1.0)
         root.addChildNode(wing)
-
-        // Two big radial cowls (round, blunt) on the wing LE, one per side.
-        let cowlMat = pbrMaterial(UIColor(white: 0.16, alpha: 1), roughness: 0.35, metalness: 0.55)
+        // Dihedralled outer-panel hint: raised, canted wingtip caps.
         for s in [Float(-1), Float(1)] {
-            // Blunt round cowl — short fat lathe.
-            let cowl = latheNode([(-3.20, 0.30), (-3.00, 0.56), (-2.55, 0.68), (-1.90, 0.72),
-                                  (-1.10, 0.70), (-0.30, 0.60), (0.60, 0.42), (1.40, 0.30)],
-                                 segments: 22, material: cowlMat)
+            let cap = SCNNode(geometry: SCNBox(width: 3.0, height: 0.26, length: 1.5, chamferRadius: 0.2))
+            cap.geometry?.materials = [bodyMat]
+            cap.position = SCNVector3(13.0 * s, wingY + 0.55, -0.4)
+            cap.eulerAngles.z = -0.16 * s   // upward outboard bend (gull)
+            root.addChildNode(cap)
+        }
+
+        // Two big ROUND RADIAL cowls on the wing LE, one per side — short fat
+        // blunt cylinders with a circular cooling-air front ring and a hub boss.
+        let cowlMat = pbrMaterial(UIColor(white: 0.16, alpha: 1), roughness: 0.35, metalness: 0.55)
+        let ringMat = pbrMaterial(UIColor(white: 0.28, alpha: 1), roughness: 0.4, metalness: 0.5)
+        for s in [Float(-1), Float(1)] {
+            // Blunt round cowl — short fat lathe, widest near the front face.
+            let cowl = latheNode([(-2.55, 0.40), (-2.35, 0.70), (-1.95, 0.80), (-1.30, 0.82),
+                                  (-0.60, 0.78), (0.20, 0.64), (1.00, 0.46), (1.60, 0.34)],
+                                 segments: 26, material: cowlMat)
             cowl.position = SCNVector3(nacX * s, nacY, -0.55)
             root.addChildNode(cowl)
-            // Nacelle fairing trailing back over the wing.
-            let fairing = latheNode([(-0.2, 0.42), (1.2, 0.44), (2.8, 0.36), (4.2, 0.20), (5.2, 0.06)],
+            // Circular cowl-front ring (the radial's cooling-inlet lip).
+            let ring = SCNNode(geometry: SCNTorus(ringRadius: 0.72, pipeRadius: 0.10))
+            ring.geometry?.materials = [ringMat]
+            ring.eulerAngles.x = .pi / 2
+            ring.position = SCNVector3(nacX * s, nacY, -3.05)
+            root.addChildNode(ring)
+            // Small central hub boss behind the spinner.
+            let boss = SCNNode(geometry: SCNSphere(radius: 0.24))
+            (boss.geometry as? SCNSphere)?.segmentCount = 12
+            boss.geometry?.materials = [cowlMat]
+            boss.position = SCNVector3(nacX * s, nacY, -2.9)
+            root.addChildNode(boss)
+            // Nacelle fairing trailing back over the wing to the gear bay.
+            let fairing = latheNode([(-0.2, 0.44), (1.2, 0.46), (2.8, 0.38), (4.2, 0.22), (5.2, 0.06)],
                                     segments: 18, material: bodyMat)
             fairing.position = SCNVector3(nacX * s, nacY - 0.05, -0.4)
             root.addChildNode(fairing)
@@ -805,21 +891,27 @@ func buildDC3(livery: Livery) -> CraftParts {
         return (pivot, oleo, w)
     }
 
-    // Big main wheels under the nacelles (the DC-3's forward-mounted mains).
+    // Big main wheels under the nacelles (the DC-3's forward-mounted mains),
+    // on long legs — these carry the weight forward and hold the nose high.
+    // Pivot y = nacY-0.30 = 1.24; strut 0.69 + radius 0.55 ⇒ contact at y ≈ 0.
+    let mainPivotY: Float = nacY - 0.30
+    let mainStrutLen: Float = mainPivotY - 0.55   // wheel radius, so contact ≈ 0
     for s in [Float(-1), Float(1)] {
-        let main = dcGearLeg(pivotAt: SCNVector3(nacX * s, nacY - 0.30, -1.7), strutLen: 1.05,
+        let main = dcGearLeg(pivotAt: SCNVector3(nacX * s, mainPivotY, -1.7), strutLen: mainStrutLen,
                              wheelRadius: 0.55, wheelWidth: 0.24)
         body.addChildNode(main.pivot)
-        // Mains fold forward + up into the cowl (partly exposed, DC-3 style).
-        gear.append((main.pivot, SCNVector3(1.55, 0, 0)))
+        // Mains rotate up-and-aft into the back of the nacelle (staying partly
+        // exposed, the DC-3 signature — the fold only tucks them ~part way).
+        gear.append((main.pivot, SCNVector3(1.35, 0, 0)))
         wheels.append((main.wheel, 0.55))
         oleos.append((main.oleo, 0, 0.12))
-        // Contact patch: nacY-0.30 - 1.05 - 0.55 ≈ 0.03.
         gearContacts.append(SCNVector3(nacX * s, 0, -1.7))
     }
     // FIXED tailwheel — small, aft, always down (NOT part of the retract fold).
-    // Struts are cheap so build it as a live leg with a spinning wheel.
-    let tail = dcGearLeg(pivotAt: SCNVector3(0, cy - 0.55, 7.9), strutLen: 0.5,
+    // A short leg on the low aft fuselage: pivot y = cy-1.15 = 1.00; strut 0.76
+    // + radius 0.24 ⇒ contact at y ≈ 0, keeping the tail low (nose-high stance).
+    let tailPivotY: Float = cy - 1.15
+    let tail = dcGearLeg(pivotAt: SCNVector3(0, tailPivotY, 7.9), strutLen: tailPivotY - 0.24,
                          wheelRadius: 0.24, wheelWidth: 0.12)
     body.addChildNode(tail.pivot)
     wheels.append((tail.wheel, 0.24))

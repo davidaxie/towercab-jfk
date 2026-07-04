@@ -35,26 +35,32 @@ func buildPhenom300(livery: Livery) -> CraftParts {
         let bodyMat = pbrMaterial(pal.body, roughness: pal.roughness, metalness: pal.metalness)
         let accentMat = pbrMaterial(pal.accent, roughness: 0.25, metalness: 0.7)
 
-        // Phenom 300 proportions — 15.6 m nose-to-tail (Comet lathe × ~0.746).
-        let fus = latheNode([(-7.75, 0.08), (-7.55, 0.38), (-6.85, 0.64), (-5.70, 0.80),
-                             (-3.80, 0.86), (1.65, 0.86), (4.00, 0.76), (5.75, 0.58),
-                             (7.05, 0.34), (7.85, 0.09)],
+        // Phenom 300 proportions — 15.6 m nose-to-tail. Slender OVAL section
+        // (~0.86 m max radius over span 15.9); a POINTED conical radome up front
+        // (gentle multi-step point, not the old blunt cap) sweeping up into the
+        // low windshield, and a long clean UPSWEPT tailcone that carries the
+        // rear engines + T-tail.
+        let fus = latheNode([(-7.82, 0.05), (-7.55, 0.24), (-7.05, 0.46), (-6.30, 0.68),
+                             (-5.30, 0.82), (-3.80, 0.86), (1.65, 0.86), (4.10, 0.75),
+                             (5.90, 0.52), (7.15, 0.28), (7.85, 0.08)],
                             segments: 32,
                             material: fuselageMaterial(kind: .phenom300, livery: livery))
         fus.position.y = cy
         root.addChildNode(fus)
 
-        // Raked windscreen cap.
+        // Two-pane raked windshield wrapping the pointed nose (left/right split
+        // reads as the low, sleek light-jet screen).
         let screen = SCNNode(geometry: SCNSphere(radius: 0.5))
         (screen.geometry as? SCNSphere)?.segmentCount = 24
         screen.geometry?.materials = [canopyGlassMaterial()]
-        screen.scale = SCNVector3(0.78, 0.5, 1.15)
-        screen.position = SCNVector3(0, 2.02, -6.0)
+        screen.scale = SCNVector3(0.78, 0.5, 1.2)
+        screen.position = SCNVector3(0, 2.02, -6.05)
         root.addChildNode(screen)
 
         // Low swept wing — 15.9 m span incl. winglets. Planform 14.9 m + 0.5 m
-        // canted winglet reach per side.
-        let wing = wingNode(span: 14.9, rootChord: 2.6, tipChord: 0.8, sweep: 2.0,
+        // canted winglet reach per side. sweep 2.4 over 7.45 m half-span ≈ 18°
+        // LE sweep (blueprint 15–20°).
+        let wing = wingNode(span: 14.9, rootChord: 2.6, tipChord: 0.8, sweep: 2.4,
                             thickness: 0.20, material: bodyMat)
         wing.position = SCNVector3(0, 0.85, 1.7)
         root.addChildNode(wing)
@@ -69,7 +75,9 @@ func buildPhenom300(livery: Livery) -> CraftParts {
             wp.close()
             let wl = finNode(path: wp, thickness: 0.045, material: bodyMat)
             let cant = SCNNode()
-            cant.position = SCNVector3(7.45 * s, 0.95, 1.35)
+            // Tip chord (sweep 2.4) runs z≈1.5 (LE) → 2.3 (TE); sit the winglet
+            // foot near the tip leading edge.
+            cant.position = SCNVector3(7.45 * s, 0.95, 1.60)
             cant.eulerAngles.z = -0.52 * s
             cant.addChildNode(wl)
             root.addChildNode(cant)
@@ -113,6 +121,28 @@ func buildPhenom300(livery: Livery) -> CraftParts {
                             thickness: 0.11, material: bodyMat)
         stab.position = SCNVector3(0, 4.55, 7.1)
         root.addChildNode(stab)
+
+        // Small VENTRAL FIN under the aft tailcone (Phenom yaw-damper signature).
+        // Built directly in the vertical plane: path drawn with +x = AFT (+Z),
+        // +y = DOWN, so it hangs below the belly and rakes rearward. Extruded
+        // sideways for thickness, matching finNode's own orientation trick.
+        let ventPath = UIBezierPath()
+        ventPath.move(to: CGPoint(x: 0.0, y: 0))            // forward root, at belly
+        ventPath.addLine(to: CGPoint(x: 1.35, y: 0))        // aft root, at belly
+        ventPath.addLine(to: CGPoint(x: 1.35, y: 0.62))     // aft tip, hangs down
+        ventPath.addQuadCurve(to: CGPoint(x: 0.30, y: 0.10),
+                              controlPoint: CGPoint(x: 0.75, y: 0.55))
+        ventPath.close()
+        let ventShape = SCNShape(path: ventPath, extrusionDepth: 0.12)
+        ventShape.chamferRadius = 0.03
+        ventShape.materials = [bodyMat]
+        let ventFin = SCNNode(geometry: ventShape)
+        // 180° about the X–Z diagonal maps local +X → world +Z (aft),
+        // local +Y → world −Y (down), local +Z (thickness) → world +X.
+        ventFin.simdOrientation = simd_quatf(angle: .pi,
+                                             axis: simd_normalize(simd_float3(1, 0, 1)))
+        ventFin.position = SCNVector3(-0.06, 1.30, 6.55)
+        root.addChildNode(ventFin)
         if livery == .meridianVIP {
             let crest = SCNNode(geometry: SCNBox(width: 0.20, height: 0.48, length: 0.34, chamferRadius: 0.06))
             crest.geometry?.materials = [accentMat]
@@ -141,19 +171,21 @@ func buildPhenom300(livery: Livery) -> CraftParts {
     }
 
     // Live control surfaces (jet). wingNode origin = ROOT TRAILING EDGE (z 1.7);
-    // near-straight TE, TE_z(x) ≈ 1.7 + 2.0·|x|/7.45.
+    // path-y → −Z, so TE_z(x) = 1.7 + (rootChord−sweep−... ) — worked out as
+    // TE_z(x) = wing.z + |x|/halfSpan · (sweep + tipChord − rootChord)
+    //         = 1.7 + |x|/7.45 · (2.4 + 0.8 − 2.6) = 1.7 + 0.0805·|x|.
     let surfBodyMat = pbrMaterial(pal.body, roughness: pal.roughness, metalness: pal.metalness)
     var ailerons: [Surface] = []
     var flaps: [Surface] = []
     for s in [Float(-1), Float(1)] {
-        // Aileron centered at |x| 5.0 → TE_z ≈ 1.7 + 2.0·5.0/7.45 ≈ 3.04.
+        // Aileron centered at |x| 5.0 → TE_z ≈ 1.7 + 0.0805·5.0 ≈ 2.10.
         let a = hingedSurfaceNode(span: 2.0, chord: 0.5, thickness: 0.10, material: surfBodyMat)
-        a.position = SCNVector3(s * 5.0, 0.85, 3.04)
+        a.position = SCNVector3(s * 5.0, 0.85, 2.10)
         ailerons.append(Surface(node: a, sign: s))
         body.addChildNode(a)
-        // Flap centered at |x| 2.0 → TE_z ≈ 1.7 + 2.0·2.0/7.45 ≈ 2.24.
+        // Flap centered at |x| 2.0 → TE_z ≈ 1.7 + 0.0805·2.0 ≈ 1.86.
         let fl = hingedSurfaceNode(span: 2.3, chord: 0.55, thickness: 0.10, material: surfBodyMat)
-        fl.position = SCNVector3(s * 2.0, 0.85, 2.24)
+        fl.position = SCNVector3(s * 2.0, 0.85, 1.86)
         flaps.append(Surface(node: fl, sign: 1))
         body.addChildNode(fl)
     }
@@ -164,11 +196,12 @@ func buildPhenom300(livery: Livery) -> CraftParts {
     elev.position = SCNVector3(0, 4.55, 7.1)
     elevator.append(Surface(node: elev, sign: 1))
     body.addChildNode(elev)
-    // finNode extends FORWARD (+x = −Z), so the fin's trailing edge sits near
-    // z 7.43 — hinge the rudder there, not aft of the whole fin.
+    // finNode extends FORWARD (+x = −Z): the fin's trailing edge rakes from
+    // z≈6.93 (top) to z≈7.27 (base, at fin.z − minPathX 0.08). Hinge the rudder
+    // at ~z 7.20 so its slab tucks into that aft edge, not behind the whole fin.
     var rudder: [Surface] = []
     let rud = hingedRudderNode(height: 2.2, chord: 0.55, thickness: 0.14, material: surfBodyMat)
-    rud.position = SCNVector3(0, 1.95, 7.43)
+    rud.position = SCNVector3(0, 1.95, 7.20)
     rudder.append(Surface(node: rud, sign: 1))
     body.addChildNode(rud)
 
@@ -256,26 +289,42 @@ func buildE175(livery: Livery) -> CraftParts {
         let bodyMat = pbrMaterial(pal.body, roughness: pal.roughness, metalness: pal.metalness)
         let accentMat = pbrMaterial(pal.accent, roughness: 0.25, metalness: 0.7)
 
-        // E175 proportions — 31.7 m nose-to-tail, wider tube than the bizjets.
-        let fus = latheNode([(-15.85, 0.10), (-15.55, 0.55), (-14.40, 0.98), (-12.30, 1.28),
-                             (-8.30, 1.42), (6.20, 1.42), (9.60, 1.30), (12.40, 1.02),
-                             (14.60, 0.58), (15.85, 0.14)],
+        // E175 proportions — 31.7 m nose-to-tail, slim high-aspect tube (max
+        // radius ~1.5, ~0.115 of span). Smooth, gently-tapered POINTED nose
+        // (787-like, not blunt) sweeping up into the 4-pane windscreen, and a
+        // long slender UPSWEPT tailcone tapering to a point that carries the
+        // protruding APU exhaust cone.
+        let fus = latheNode([(-15.85, 0.06), (-15.55, 0.32), (-14.95, 0.68), (-14.00, 1.05),
+                             (-12.60, 1.32), (-9.80, 1.46), (6.20, 1.46), (9.60, 1.32),
+                             (12.40, 1.02), (14.60, 0.56), (15.85, 0.12)],
                             segments: 32,
                             material: fuselageMaterial(kind: .e175, livery: livery))
         fus.position.y = cy
         root.addChildNode(fus)
 
-        // Raked windscreen cap.
+        // Protruding APU exhaust cone poking straight out of the pointed
+        // tailcone tip — a signature E-Jet cue. Small dark cone aft of z 15.85.
+        let apuMat = pbrMaterial(UIColor(white: 0.18, alpha: 1), roughness: 0.6, metalness: 0.4)
+        let apu = SCNCone(topRadius: 0.06, bottomRadius: 0.16, height: 0.55)
+        apu.radialSegmentCount = 16
+        apu.materials = [apuMat]
+        let apuNode = SCNNode(geometry: apu)
+        apuNode.eulerAngles.x = .pi / 2   // small end (+Y) rotates to +Z: taper points aft
+        apuNode.position = SCNVector3(0, cy + 0.05, 16.15)
+        root.addChildNode(apuNode)
+
+        // Four-pane raked windscreen wrapping the pointed nose.
         let screen = SCNNode(geometry: SCNSphere(radius: 0.82))
         (screen.geometry as? SCNSphere)?.segmentCount = 24
         screen.geometry?.materials = [canopyGlassMaterial()]
-        screen.scale = SCNVector3(0.80, 0.5, 1.2)
-        screen.position = SCNVector3(0, 2.95, -12.5)
+        screen.scale = SCNVector3(0.80, 0.5, 1.25)
+        screen.position = SCNVector3(0, 2.95, -12.6)
         root.addChildNode(screen)
 
         // Low swept wing — 26.0 m span incl. winglets. Planform 24.7 m + 0.65 m
-        // canted winglet reach per side.
-        let wing = wingNode(span: 24.7, rootChord: 4.3, tipChord: 1.2, sweep: 3.4,
+        // canted winglet reach per side. sweep 4.0 over 12.35 m half-span gives
+        // a clear ~18° LE sweep reading (blueprint ~23–25° quarter-chord).
+        let wing = wingNode(span: 24.7, rootChord: 4.3, tipChord: 1.2, sweep: 4.0,
                             thickness: 0.30, material: bodyMat)
         wing.position = SCNVector3(0, 1.35, 3.0)
         root.addChildNode(wing)
@@ -290,7 +339,9 @@ func buildE175(livery: Livery) -> CraftParts {
             wp.close()
             let wl = finNode(path: wp, thickness: 0.055, material: bodyMat)
             let cant = SCNNode()
-            cant.position = SCNVector3(12.35 * s, 1.45, 2.35)
+            // Tip chord (sweep 4.0) runs z≈2.7 (LE) → 3.9 (TE); sit the winglet
+            // foot near the tip leading edge so it reads as a wingtip fence.
+            cant.position = SCNVector3(12.35 * s, 1.45, 2.85)
             cant.eulerAngles.z = -0.50 * s
             cant.addChildNode(wl)
             root.addChildNode(cant)
@@ -315,6 +366,16 @@ func buildE175(livery: Livery) -> CraftParts {
             intake.eulerAngles.x = .pi / 2
             intake.position = SCNVector3(4.6 * s, 0.55, -2.30)
             root.addChildNode(intake)
+            // Prominent core exhaust PLUG poking aft of the nacelle tail (first-
+            // gen CF34 shows a separate core exhaust). Nacelle tail is at world
+            // z = −0.30 + 2.10 = 1.80, r 0.14; the plug cone extends aft from it.
+            let plug = SCNCone(topRadius: 0.05, bottomRadius: 0.15, height: 0.42)
+            plug.radialSegmentCount = 16
+            plug.materials = [intakeMat]
+            let plugNode = SCNNode(geometry: plug)
+            plugNode.eulerAngles.x = .pi / 2   // small end (+Y) → +Z: taper points aft
+            plugNode.position = SCNVector3(4.6 * s, 0.55, 1.95)
+            root.addChildNode(plugNode)
             // Pylon: vertical strut linking the nacelle up to the wing underside.
             let pylon = SCNNode(geometry: SCNBox(width: 0.20, height: 0.85, length: 1.5, chamferRadius: 0.05))
             pylon.geometry?.materials = [bodyMat]
@@ -323,13 +384,19 @@ func buildE175(livery: Livery) -> CraftParts {
         }
 
         // CONVENTIONAL low tail: swept fin + a LOW horizontal stab mounted on the
-        // aft fuselage (NOT a T-tail).
+        // aft fuselage (NOT a T-tail). The base carries the signature short
+        // triangular Embraer DORSAL FIN fillet blending forward into the spine.
+        // finNode: +x = forward (−Z); x=0.14 is the aft (trailing) base corner,
+        // x rising toward 5.4 reaches forward down the spine → the dorsal fillet.
         let finPath = UIBezierPath()
-        finPath.move(to: CGPoint(x: 0.12, y: 0))
-        finPath.addLine(to: CGPoint(x: 0.70, y: 4.20))
-        finPath.addQuadCurve(to: CGPoint(x: 2.05, y: 4.35), controlPoint: CGPoint(x: 1.20, y: 4.45))
-        finPath.addQuadCurve(to: CGPoint(x: 3.45, y: 0.35), controlPoint: CGPoint(x: 2.95, y: 1.9))
-        finPath.addQuadCurve(to: CGPoint(x: 4.30, y: 0.0), controlPoint: CGPoint(x: 3.85, y: 0.06))
+        finPath.move(to: CGPoint(x: 0.14, y: 0))                      // aft base corner
+        finPath.addLine(to: CGPoint(x: 0.80, y: 4.20))               // swept LE up to...
+        finPath.addQuadCurve(to: CGPoint(x: 2.15, y: 4.35), controlPoint: CGPoint(x: 1.30, y: 4.45))
+        finPath.addQuadCurve(to: CGPoint(x: 3.55, y: 0.55), controlPoint: CGPoint(x: 3.05, y: 2.0))
+        // Long low DORSAL FILLET: the fin foot rakes forward and tapers to a
+        // shallow point well ahead of the fin, hugging the fuselage spine.
+        finPath.addLine(to: CGPoint(x: 4.55, y: 0.22))
+        finPath.addQuadCurve(to: CGPoint(x: 5.40, y: 0.0), controlPoint: CGPoint(x: 5.05, y: 0.04))
         finPath.close()
         let fin = finNode(path: finPath, thickness: 0.24, material: bodyMat)
         fin.position = SCNVector3(0, 3.05, 14.7)
@@ -368,19 +435,20 @@ func buildE175(livery: Livery) -> CraftParts {
     }
 
     // Live control surfaces (jet). wingNode origin = ROOT TRAILING EDGE (z 3.0);
-    // near-straight TE, TE_z(x) ≈ 3.0 + 3.4·|x|/12.35.
+    // path-y → −Z, so TE_z(x) = wing.z + |x|/halfSpan · (sweep + tipChord − rootChord)
+    //         = 3.0 + |x|/12.35 · (4.0 + 1.2 − 4.3) = 3.0 + 0.0729·|x|.
     let surfBodyMat = pbrMaterial(pal.body, roughness: pal.roughness, metalness: pal.metalness)
     var ailerons: [Surface] = []
     var flaps: [Surface] = []
     for s in [Float(-1), Float(1)] {
-        // Aileron centered at |x| 8.4 → TE_z ≈ 3.0 + 3.4·8.4/12.35 ≈ 5.31.
+        // Aileron centered at |x| 8.4 → TE_z ≈ 3.0 + 0.0729·8.4 ≈ 3.61.
         let a = hingedSurfaceNode(span: 3.2, chord: 0.75, thickness: 0.14, material: surfBodyMat)
-        a.position = SCNVector3(s * 8.4, 1.35, 5.31)
+        a.position = SCNVector3(s * 8.4, 1.35, 3.61)
         ailerons.append(Surface(node: a, sign: s))
         body.addChildNode(a)
-        // Flap centered at |x| 3.6 → TE_z ≈ 3.0 + 3.4·3.6/12.35 ≈ 3.99.
+        // Flap centered at |x| 3.6 → TE_z ≈ 3.0 + 0.0729·3.6 ≈ 3.26.
         let fl = hingedSurfaceNode(span: 3.8, chord: 0.9, thickness: 0.14, material: surfBodyMat)
-        fl.position = SCNVector3(s * 3.6, 1.35, 3.99)
+        fl.position = SCNVector3(s * 3.6, 1.35, 3.26)
         flaps.append(Surface(node: fl, sign: 1))
         body.addChildNode(fl)
     }
@@ -391,11 +459,12 @@ func buildE175(livery: Livery) -> CraftParts {
     elev.position = SCNVector3(0, 3.30, 14.4)
     elevator.append(Surface(node: elev, sign: 1))
     body.addChildNode(elev)
-    // finNode extends FORWARD (+x = −Z), so the fin's trailing edge sits near
-    // z 14.82 — hinge the rudder there, not aft of the whole fin.
+    // finNode extends FORWARD (+x = −Z): the fin's trailing edge is the rakes
+    // from z≈13.9 (top) to z≈14.56 (base, at fin.z − minPathX 0.14). Hinge the
+    // rudder at ~z 14.45 so its slab tucks into that aft edge, not behind it.
     var rudder: [Surface] = []
     let rud = hingedRudderNode(height: 3.7, chord: 0.9, thickness: 0.20, material: surfBodyMat)
-    rud.position = SCNVector3(0, 3.05, 14.82)
+    rud.position = SCNVector3(0, 3.05, 14.45)
     rudder.append(Surface(node: rud, sign: 1))
     body.addChildNode(rud)
 

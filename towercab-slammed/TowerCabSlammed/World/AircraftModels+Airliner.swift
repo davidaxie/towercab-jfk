@@ -7,14 +7,26 @@ import UIKit
 // to-scale procedural builds, all mirroring buildComet (jet CraftParts): a long
 // lathe-turned tube fuselage carrying a texture-baked cabin-window row, a LOW
 // swept wing, UNDER-WING turbofan nacelles via makeFanGroup, a conventional
-// tail (swept fin + horizontal stab with a hinged rudder/elevator), retractable
-// gear (multi-wheel bogies on the big ones) built from live wheels + real oleos,
-// a makeLightKit and a makeContactShadow.
+// swept tail (swept fin + horizontal stab with a hinged rudder/elevator),
+// retractable gear (multi-wheel bogies on the big ones) built from live wheels +
+// real oleos, a makeLightKit and a makeContactShadow.
 //
-//   buildBoeing737 → boeing737  (737-800, narrowbody, 2 engines, blended winglets)
-//   buildAirbus320 → airbus320  (A320,     narrowbody, 2 engines, sharklets)
-//   buildBoeing777 → boeing777  (777-300ER, widebody TWIN, 2 big engines, raked tips)
-//   buildAirbus380 → airbus380  (A380-800, DOUBLE-DECK, 4 engines, the whale)
+// Every build is grounded in the researched reference blueprint (span/length/
+// height + the distinctiveFeatures list), and the silhouettes are tuned so the
+// four read UNMISTAKABLY apart:
+//
+//   buildBoeing737 → boeing737  (737-800: 35.79 m span, sits LOW to the tarmac,
+//                    SHARP pointed nose, D-shaped flat-bottom CFM inlets, main
+//                    wheels left exposed in the belly, ~2.4 m BLENDED winglets)
+//   buildAirbus320 → airbus320  (A320: 35.8 m span, WIDER/rounder BULBOUS nose,
+//                    sits TALL on long gear, perfectly ROUND inlets, blade
+//                    SHARKLETS — the 737's opposite tells)
+//   buildBoeing777 → boeing777  (777-300ER: 64.8 m span, long circular widebody
+//                    twin, two ENORMOUS GE90 nacelles, curved RAKED wingtips,
+//                    six-wheel main bogies, flat blade tailcone)
+//   buildAirbus380 → airbus380  (A380-800: 79.75 m span, full-length DOUBLE-DECK
+//                    ovoid, bulbous whale nose, FOUR engines two-per-wing,
+//                    up-AND-down wingtip FENCES, wing + body main-gear bogies)
 //
 // Model space matches the other builds: node origin = ground contact (bottom of
 // tires), nose = −Z, tail = +Z. Static shell goes through AirframeCache; live
@@ -36,8 +48,9 @@ private struct AirlinerSpec {
     let cy: Float
     let fuseSegments: Int
     /// Optional upper-deck bulge for the A380 — a second, higher lathe tube.
-    let upperDeck: [(z: Float, r: Float)]?
-    let upperDeckCY: Float
+    /// Defaulted so single-deck airliners can omit them in the memberwise init.
+    var upperDeck: [(z: Float, r: Float)]? = nil
+    var upperDeckCY: Float = 0
 
     // Flight-deck windscreen cap (dark glass ellipsoid over the nose).
     let screenScale: SCNVector3
@@ -58,6 +71,9 @@ private struct AirlinerSpec {
     let tipHeight: CGFloat
     let tipChordFwd: CGFloat     // tip device root chord (fore-aft)
     let tipCant: Float
+    /// A380 wingtip fence: a short LOWER fin mirroring the upper one, so the tip
+    /// device projects both up AND down (the A380 signature). nil ⇒ no lower fin.
+    let lowerFenceHeight: CGFloat?
 
     // Under-wing engines: one entry per engine → x station (mirrored via ±),
     // fan radius, and the fore/aft z of the nacelle centre + intake face.
@@ -69,6 +85,9 @@ private struct AirlinerSpec {
     let nacelleLen: Float        // full cowl length
     let intakeZ: Float           // intake-face z (fan sits here)
     let exhaustZ: Float          // heat-wash z (aft of the cowl)
+    /// 737 tell: squash the intake ring vertically so the inlet reads as a
+    /// flat-bottomed "D" (extra ground clearance on the low-slung 737). 1 ⇒ round.
+    let inletFlatten: Float
 
     // Swept vertical fin (finNode: +x path = forward −Z; TE near node.z).
     let finBaseZ: Float          // node z (≈ fin trailing edge)
@@ -105,6 +124,9 @@ private struct AirlinerSpec {
     let mainWheelR: CGFloat, mainWheelW: CGFloat
     let mainBogieRows: Int       // wheel pairs fore↔aft per main leg (1, 2 or 3)
     let mainLegXs: [Float]       // |x| stations for the main legs on ONE side
+    /// 737 tell: leave the retracted main wheels visible in the belly (no gear
+    /// doors) — a static half-wheel pair at the wheel well. nil ⇒ clean belly.
+    let exposedMainWheelZ: Float?
 
     // Light kit anchor points + contact-shadow footprint.
     let light: LightSpec
@@ -127,6 +149,8 @@ private func buildAirliner(_ spec: AirlinerSpec, livery: Livery) -> CraftParts {
         let nacMat = pbrMaterial(pal.body, roughness: max(0.12, pal.roughness - 0.06),
                                  metalness: min(1, pal.metalness + 0.15))
         let intakeMat = pbrMaterial(UIColor(white: 0.05, alpha: 1), roughness: 0.4)
+        let tireMat = pbrMaterial(UIColor(white: 0.08, alpha: 1), roughness: 0.9)
+        let hubMat = pbrMaterial(UIColor(white: 0.7, alpha: 1), roughness: 0.4, metalness: 0.6)
 
         // --- Fuselage tube (cabin windows are baked into the texture) ---------
         let fus = latheNode(spec.fuselage, segments: spec.fuseSegments,
@@ -159,25 +183,37 @@ private func buildAirliner(_ spec: AirlinerSpec, livery: Livery) -> CraftParts {
 
         // Wingtip devices. cant≈0 ⇒ raked flat tip (777); larger ⇒ upright
         // winglet/sharklet (737/A320). Rooted at the wing tip LE-ish, extends up.
+        // For the A380 an optional LOWER fence mirrors the upper one.
         let wingTipLE_Z = spec.wingTE_Z - Float(spec.wingRootChord - spec.wingSweep)
         for s in [Float(-1), Float(1)] {
-            let wp = UIBezierPath()
+            /// A swept-back tapering tip fin drawn +x = forward (−Z), +y = up,
+            /// scaled to `h` metres tall.
+            func tipFinPath(height h: Float, chord c: Float) -> UIBezierPath {
+                let wp = UIBezierPath()
+                wp.move(to: CGPoint(x: 0, y: 0))
+                wp.addLine(to: CGPoint(x: CGFloat(c * 0.18), y: CGFloat(h)))
+                wp.addQuadCurve(to: CGPoint(x: CGFloat(c * 0.55), y: CGFloat(h)),
+                                controlPoint: CGPoint(x: CGFloat(c * 0.30), y: CGFloat(h * 1.05)))
+                wp.addQuadCurve(to: CGPoint(x: CGFloat(c), y: 0),
+                                controlPoint: CGPoint(x: CGFloat(c * 0.9), y: CGFloat(h * 0.3)))
+                wp.close()
+                return wp
+            }
             let c = Float(spec.tipChordFwd)
-            let h = Float(spec.tipHeight)
-            // Path: +x = forward (−Z), +y = up. A swept-back tapering tip fin.
-            wp.move(to: CGPoint(x: 0, y: 0))
-            wp.addLine(to: CGPoint(x: CGFloat(c * 0.18), y: CGFloat(h)))
-            wp.addQuadCurve(to: CGPoint(x: CGFloat(c * 0.55), y: CGFloat(h)),
-                            controlPoint: CGPoint(x: CGFloat(c * 0.30), y: CGFloat(h * 1.05)))
-            wp.addQuadCurve(to: CGPoint(x: CGFloat(c), y: 0),
-                            controlPoint: CGPoint(x: CGFloat(c * 0.9), y: CGFloat(h * 0.3)))
-            wp.close()
-            let tip = finNode(path: wp, thickness: spec.wingThickness * 0.42, material: bodyMat)
+            let upTip = finNode(path: tipFinPath(height: Float(spec.tipHeight), chord: c),
+                                thickness: spec.wingThickness * 0.42, material: bodyMat)
             let cant = SCNNode()
             cant.position = SCNVector3(spec.wingHalfSpan * s, spec.wingY + 0.02,
                                        wingTipLE_Z + Float(spec.tipChordFwd) * 0.55)
             cant.eulerAngles.z = -spec.tipCant * s   // splay outboard
-            cant.addChildNode(tip)
+            cant.addChildNode(upTip)
+            // A380 fence: a short lower fin dropping below the wingtip.
+            if let lower = spec.lowerFenceHeight {
+                let dnTip = finNode(path: tipFinPath(height: Float(lower), chord: c * 0.8),
+                                    thickness: spec.wingThickness * 0.42, material: bodyMat)
+                dnTip.scale = SCNVector3(1, -1, 1)   // flip so it grows downward
+                cant.addChildNode(dnTip)
+            }
             root.addChildNode(cant)
         }
 
@@ -193,13 +229,19 @@ private func buildAirliner(_ spec: AirlinerSpec, livery: Livery) -> CraftParts {
                                      (half * 0.8, Float(spec.fanRadius) * 0.66),
                                      (half, Float(spec.fanRadius) * 0.34)],
                                     segments: 22, material: nacMat)
+                // 737 D-inlet: squash the cowl vertically so the bottom flattens.
+                if spec.inletFlatten < 0.999 {
+                    nac.scale = SCNVector3(1, spec.inletFlatten, 1)
+                    nac.pivot = SCNMatrix4MakeTranslation(0, -Float(spec.fanRadius) * (1 - spec.inletFlatten) * 0.5, 0)
+                }
                 nac.position = SCNVector3(x, spec.nacelleY, spec.nacelleZ)
                 root.addChildNode(nac)
-                // Dark intake ring at the fan face.
+                // Dark intake ring at the fan face (flattened to match a D-inlet).
                 let intake = SCNNode(geometry: SCNTorus(ringRadius: Double(spec.fanRadius) * 0.92,
                                                         pipeRadius: Double(spec.fanRadius) * 0.10))
                 intake.geometry?.materials = [intakeMat]
                 intake.eulerAngles.x = .pi / 2
+                intake.scale = SCNVector3(1, 1, spec.inletFlatten)  // torus lies in XZ ⇒ z is vertical
                 intake.position = SCNVector3(x, spec.nacelleY, spec.intakeZ)
                 root.addChildNode(intake)
                 // Pylon linking the nacelle up to the wing underside.
@@ -215,7 +257,7 @@ private func buildAirliner(_ spec: AirlinerSpec, livery: Livery) -> CraftParts {
             }
         }
 
-        // --- Conventional tail: swept fin + horizontal stab -------------------
+        // --- Conventional swept tail: swept fin + horizontal stab -------------
         let finPath = UIBezierPath()
         let fh = Float(spec.finHeight)
         let frc = Float(spec.finRootChord)
@@ -239,6 +281,20 @@ private func buildAirliner(_ spec: AirlinerSpec, livery: Livery) -> CraftParts {
                             thickness: spec.stabThickness, material: bodyMat)
         stab.position = SCNVector3(0, spec.stabY, spec.stabTE_Z)
         root.addChildNode(stab)
+
+        // 737 tell: retracted main wheels left exposed in the belly (no doors).
+        if let ez = spec.exposedMainWheelZ {
+            for s in [Float(-1), Float(1)] {
+                for dz in [Float(-1), Float(1)] {
+                    let w = wheelNode(radius: spec.mainWheelR, width: spec.mainWheelW,
+                                      tire: tireMat, hub: hubMat)
+                    // Tuck them up flush against the belly centreline.
+                    w.position = SCNVector3(0.55 * s, spec.cy - Float(spec.mainWheelR) * 0.7,
+                                            ez + dz * Float(spec.mainWheelR) * 1.1)
+                    root.addChildNode(w)
+                }
+            }
+        }
 
         return root
     }
@@ -377,141 +433,165 @@ private func buildAirliner(_ spec: AirlinerSpec, livery: Livery) -> CraftParts {
 
 // MARK: - Boeing 737-800 (narrowbody, 2 engines, blended winglets)
 
-/// 737-800 — span 35.8 m, len 39.5 m. Slim narrowbody tube, low wing, two
-/// under-wing CFM-style nacelles, tall blended winglets, swept fin.
+/// 737-800 — span 35.79 m, len 39.47 m, height 12.55 m. A slim CIRCULAR tube
+/// (Ø 3.76 m ⇒ r 1.88). The 737 hallmarks, all baked here: it sits LOW to the
+/// tarmac on short gear (small belly-to-ground gap); a comparatively SHARP,
+/// pointed nose; two CFM56 nacelles with the signature flat-bottomed "D" inlet
+/// hung close to the ramp; ~2.4 m blended winglets; a short stubby tailcone with
+/// a cylindrical APU "bullet"; and main-gear wheel faces left exposed in the
+/// belly (no gear doors).
 func buildBoeing737(livery: Livery) -> CraftParts {
-    let cy: Float = 2.05
-    let r: Float = 1.88   // cabin radius
-    // Fuselage: −19.6 (nose) → +19.9 (tail cone). Length ≈ 39.5 m.
+    let cy: Float = 1.72   // LOW-slung 737: belly rides close to the ground
+    let r: Float = 1.88    // cabin radius (Ø 3.76 m)
+    // Fuselage: −19.6 (SHARP nose) → +19.87 (short stubby tail). Length ≈ 39.47.
     let fuselage: [(z: Float, r: Float)] = [
-        (-19.6, 0.10), (-19.2, 0.60), (-18.3, 1.05), (-16.8, 1.55),
-        (-14.5, r), (-4.0, r), (6.0, r), (11.0, r * 0.94),
-        (15.5, r * 0.72), (18.4, r * 0.42), (19.9, 0.16)]
+        (-19.6, 0.07), (-19.35, 0.42), (-18.7, 0.86), (-17.5, 1.36),
+        (-15.3, 1.78), (-13.0, r), (-3.0, r), (7.0, r),
+        (12.5, r * 0.95), (16.5, r * 0.68), (18.6, r * 0.40), (19.87, 0.15)]
     let spec = AirlinerSpec(
         kind: .boeing737,
         fuselage: fuselage, cy: cy, fuseSegments: 32,
         upperDeck: nil, upperDeckCY: 0,
-        screenScale: SCNVector3(0.80, 0.62, 1.25),
-        screenPos: SCNVector3(0, cy + 0.95, -16.7),
-        wingSpan: 35.8, wingRootChord: 6.2, wingTipChord: 1.6, wingSweep: 6.4,
-        wingThickness: 0.42, wingY: 1.35, wingTE_Z: 3.6,
+        // Narrow, pointed windscreen cap set well forward on the sharp nose.
+        screenScale: SCNVector3(0.74, 0.56, 1.35),
+        screenPos: SCNVector3(0, cy + 0.92, -16.9),
+        wingSpan: 35.79, wingRootChord: 6.2, wingTipChord: 1.55, wingSweep: 6.4,
+        wingThickness: 0.42, wingY: 1.05, wingTE_Z: 3.6,
+        // Blended winglets ~2.4 m: tall, smoothly curved, moderate cant.
         wingHalfSpan: 17.4, tipHeight: 2.4, tipChordFwd: 1.5, tipCant: 1.15,
-        engineXs: [5.6], fanRadius: 1.05, nacelleZ: -2.4, nacelleY: 0.95,
-        nacelleLen: 4.2, intakeZ: -4.2, exhaustZ: 0.5,
-        finBaseZ: 18.4, finBaseY: cy + 1.4, finHeight: 6.6,
+        lowerFenceHeight: nil,
+        // CFM56 hung LOW and close to the ramp; D-shaped inlet (flatten 0.82).
+        // nacelleY keeps the flattened cowl bottom just above the tarmac.
+        engineXs: [5.6], fanRadius: 1.05, nacelleZ: -2.4, nacelleY: 1.12,
+        nacelleLen: 4.2, intakeZ: -4.2, exhaustZ: 0.5, inletFlatten: 0.82,
+        finBaseZ: 18.4, finBaseY: cy + 1.4, finHeight: 6.7,
         finRootChord: 5.4, finMidChord: 2.6, finThickness: 0.34,
-        rudderHeight: 5.6, rudderChord: 1.3,
+        rudderHeight: 5.7, rudderChord: 1.3,
         stabSpan: 13.4, stabRootChord: 3.4, stabTipChord: 1.2, stabSweep: 2.4,
         stabThickness: 0.24, stabY: cy + 0.55, stabTE_Z: 18.2,
         ailCenterX: 14.5, ailSpan: 3.2, ailChord: 0.9,
         flapCenterX: 6.5, flapSpan: 6.4, flapChord: 1.6,
         surfThickness: 0.16,
-        // Gear pivots sit so tire contact lands at y ≈ 0 (pivotY = strut + wheelR).
-        noseZ: -14.6, nosePivotY: 1.74, noseStrutLen: 1.3,
+        // SHORT gear (737 sits low): pivotY = strut + wheelR so contact ≈ y 0.
+        noseZ: -14.6, nosePivotY: 1.42, noseStrutLen: 0.98,
         noseWheelR: 0.44, noseWheelW: 0.18,
-        mainX: 2.6, mainZ: 5.6, mainPivotY: 1.91, mainStrutLen: 1.35,
+        mainX: 2.6, mainZ: 5.6, mainPivotY: 1.58, mainStrutLen: 1.02,
         mainWheelR: 0.56, mainWheelW: 0.24, mainBogieRows: 1, mainLegXs: [2.6],
+        exposedMainWheelZ: 5.4,   // 737 tell: wheels visible in the belly
         light: LightSpec(
-            navLeft: SCNVector3(-17.9, 1.35, 3.0),
-            navRight: SCNVector3(17.9, 1.35, 3.0),
-            tail: SCNVector3(0, cy + 1.3, 20.0),
+            navLeft: SCNVector3(-17.9, 1.05, 3.0),
+            navRight: SCNVector3(17.9, 1.05, 3.0),
+            tail: SCNVector3(0, cy + 1.3, 19.9),
             beacon: SCNVector3(0, cy + 1.9, 2.0),
-            landing: SCNVector3(0, 0.9, 4.0)),
-        shadowSpan: 35.8, shadowLen: 39.5,
-        smokeOffset: SCNVector3(0, 0.5, 5.6))
+            landing: SCNVector3(0, 0.6, 4.0)),
+        shadowSpan: 35.79, shadowLen: 39.47,
+        smokeOffset: SCNVector3(0, 0.4, 5.6))
     return buildAirliner(spec, livery: livery)
 }
 
 // MARK: - Airbus A320 (narrowbody, 2 engines, sharklets)
 
-/// A320 — span 35.8 m, len 37.6 m. Same footprint as the 737 but a shorter,
-/// slightly fatter tube, a more upright fin, and blade-like SHARKLETS (near-
-/// vertical, shorter than the 737's blended winglet) so the two read distinct.
+/// A320 — span 35.8 m, len 37.57 m, height 11.76 m. Same footprint class as the
+/// 737 but tuned to the A320's *opposite* tells so the two never blur together:
+/// a WIDER, stouter tube (Ø 3.95 m ⇒ r 1.98); a ROUNDED, slightly bulbous nose
+/// (not the 737's sharp point); it sits noticeably TALL on longer gear (clear
+/// belly-to-ground gap); perfectly ROUND engine inlets; and blade-like near-
+/// vertical SHARKLETS (~2.5 m).
 func buildAirbus320(livery: Livery) -> CraftParts {
-    let cy: Float = 2.05
-    let r: Float = 1.95   // A320 fuselage is a touch wider than the 737
-    // Fuselage: −18.7 (nose) → +18.9 (tail). Length ≈ 37.6 m.
+    let cy: Float = 2.25   // A320 rides TALL on long gear (vs the low 737)
+    let r: Float = 1.98    // WIDER than the 737 (Ø 3.95 m)
+    // Fuselage: −18.6 (ROUNDED bulbous nose) → +18.97 (long clean conical tail).
     let fuselage: [(z: Float, r: Float)] = [
-        (-18.7, 0.10), (-18.3, 0.62), (-17.4, 1.10), (-15.9, 1.60),
-        (-13.6, r), (-3.5, r), (6.5, r), (11.5, r * 0.95),
-        (15.2, r * 0.72), (17.6, r * 0.42), (18.9, 0.16)]
+        (-18.6, 0.30), (-18.2, 0.82), (-17.3, 1.32), (-15.8, 1.72),
+        (-13.6, r), (-3.5, r), (6.5, r), (11.5, r * 0.96),
+        (15.4, r * 0.72), (17.7, r * 0.42), (18.97, 0.16)]
     let spec = AirlinerSpec(
         kind: .airbus320,
         fuselage: fuselage, cy: cy, fuseSegments: 32,
         upperDeck: nil, upperDeckCY: 0,
-        screenScale: SCNVector3(0.82, 0.64, 1.15),
-        screenPos: SCNVector3(0, cy + 0.98, -15.8),
+        // Rounder, blunter windscreen cap on the bulbous nose.
+        screenScale: SCNVector3(0.86, 0.68, 1.05),
+        screenPos: SCNVector3(0, cy + 0.98, -15.9),
         wingSpan: 35.8, wingRootChord: 6.1, wingTipChord: 1.6, wingSweep: 6.0,
-        wingThickness: 0.42, wingY: 1.35, wingTE_Z: 4.2,
+        wingThickness: 0.42, wingY: 1.5, wingTE_Z: 4.2,
         // Sharklets: tall + near-vertical (bigger cant than the 737 winglet).
-        wingHalfSpan: 17.35, tipHeight: 2.3, tipChordFwd: 1.2, tipCant: 1.4,
-        engineXs: [5.5], fanRadius: 1.02, nacelleZ: -1.8, nacelleY: 0.95,
-        nacelleLen: 4.0, intakeZ: -3.5, exhaustZ: 1.0,
+        wingHalfSpan: 17.35, tipHeight: 2.5, tipChordFwd: 1.2, tipCant: 1.42,
+        lowerFenceHeight: nil,
+        // Round inlets (flatten 1.0) sitting higher off the ground than the 737.
+        engineXs: [5.5], fanRadius: 1.02, nacelleZ: -1.8, nacelleY: 1.2,
+        nacelleLen: 4.0, intakeZ: -3.5, exhaustZ: 1.0, inletFlatten: 1.0,
         finBaseZ: 17.6, finBaseY: cy + 1.4, finHeight: 6.3,
         finRootChord: 5.0, finMidChord: 3.0, finThickness: 0.32,
         rudderHeight: 5.4, rudderChord: 1.4,
-        stabSpan: 12.4, stabRootChord: 3.2, stabTipChord: 1.1, stabSweep: 2.2,
+        stabSpan: 12.45, stabRootChord: 3.2, stabTipChord: 1.1, stabSweep: 2.2,
         stabThickness: 0.22, stabY: cy + 0.5, stabTE_Z: 17.4,
         ailCenterX: 14.2, ailSpan: 3.0, ailChord: 0.9,
         flapCenterX: 6.6, flapSpan: 6.6, flapChord: 1.6,
         surfThickness: 0.16,
-        // Gear pivots sit so tire contact lands at y ≈ 0 (pivotY = strut + wheelR).
-        noseZ: -13.7, nosePivotY: 1.74, noseStrutLen: 1.3,
+        // TALLER gear than the 737 → the fuselage sits high with clear belly gap.
+        noseZ: -13.7, nosePivotY: 1.94, noseStrutLen: 1.5,
         noseWheelR: 0.44, noseWheelW: 0.18,
-        mainX: 2.6, mainZ: 6.2, mainPivotY: 1.90, mainStrutLen: 1.35,
+        mainX: 2.6, mainZ: 6.2, mainPivotY: 2.10, mainStrutLen: 1.55,
         mainWheelR: 0.55, mainWheelW: 0.24, mainBogieRows: 1, mainLegXs: [2.6],
+        exposedMainWheelZ: nil,   // A320 gear is fully doored (no visible wheels)
         light: LightSpec(
-            navLeft: SCNVector3(-17.9, 1.35, 3.6),
-            navRight: SCNVector3(17.9, 1.35, 3.6),
+            navLeft: SCNVector3(-17.9, 1.5, 3.6),
+            navRight: SCNVector3(17.9, 1.5, 3.6),
             tail: SCNVector3(0, cy + 1.3, 19.0),
             beacon: SCNVector3(0, cy + 1.9, 2.0),
-            landing: SCNVector3(0, 0.9, 4.6)),
-        shadowSpan: 35.8, shadowLen: 37.6,
+            landing: SCNVector3(0, 1.0, 4.6)),
+        shadowSpan: 35.8, shadowLen: 37.57,
         smokeOffset: SCNVector3(0, 0.5, 6.2))
     return buildAirliner(spec, livery: livery)
 }
 
 // MARK: - Boeing 777-300ER (widebody TWIN, 2 big engines, raked tips)
 
-/// 777-300ER — span 64.8 m, len 73.9 m. Long widebody twin; two of the largest
-/// turbofans in service; RAKED (swept, near-flat) wingtips; six-wheel main
-/// bogies. The silhouette reads as a very long tube with just two huge engines.
+/// 777-300ER — span 64.8 m, len 73.9 m, height 18.5 m. A long, perfectly
+/// CIRCULAR widebody tube (Ø 6.20 m ⇒ r 3.1) with the smoothly drooped Boeing
+/// nose. Twin GE90 nacelles — the largest jet engines in service (fan Ø ~3.3 m ⇒
+/// r 1.65), hung well ahead of and below the wing, disproportionately huge vs
+/// the wing. Curved backward-RAKED wingtips (pointed rake, NOT vertical
+/// winglets). SIX-wheel main bogies (three axles per side). Long tailcone ending
+/// in the flat vertical BLADE tailcone. Tall main gear for GE90 clearance.
 func buildBoeing777(livery: Livery) -> CraftParts {
-    let cy: Float = 2.9
-    let r: Float = 3.1    // widebody cabin radius
-    // Fuselage: −36.6 (nose) → +37.3 (tail). Length ≈ 73.9 m.
+    let cy: Float = 3.05
+    let r: Float = 3.1     // widebody cabin radius (Ø 6.20 m)
+    // Fuselage: −36.6 (drooped nose) → +37.3 (flat blade tailcone). Len ≈ 73.9.
     let fuselage: [(z: Float, r: Float)] = [
-        (-36.6, 0.14), (-36.0, 0.9), (-34.6, 1.7), (-32.0, 2.5),
-        (-27.5, r), (-8.0, r), (12.0, r), (22.0, r * 0.95),
-        (30.0, r * 0.70), (34.5, r * 0.40), (37.3, 0.18)]
+        (-36.6, 0.16), (-35.9, 1.05), (-34.3, 1.95), (-31.6, 2.72),
+        (-27.0, r), (-8.0, r), (12.0, r), (22.0, r * 0.96),
+        (30.0, r * 0.70), (34.8, r * 0.34), (37.3, 0.14)]
     let spec = AirlinerSpec(
         kind: .boeing777,
         fuselage: fuselage, cy: cy, fuseSegments: 40,
-        upperDeck: nil, upperDeckCY: 0,
-        screenScale: SCNVector3(0.86, 0.70, 1.6),
-        screenPos: SCNVector3(0, cy + 1.55, -31.6),
-        wingSpan: 64.8, wingRootChord: 11.5, wingTipChord: 2.4, wingSweep: 13.0,
-        wingThickness: 0.75, wingY: 1.9, wingTE_Z: 6.5,
-        // Raked tips: long, low, minimal cant (swept-back flat extension).
-        wingHalfSpan: 31.6, tipHeight: 0.55, tipChordFwd: 3.2, tipCant: 0.18,
-        engineXs: [10.6], fanRadius: 1.72, nacelleZ: -3.6, nacelleY: 1.85,
-        nacelleLen: 7.4, intakeZ: -6.8, exhaustZ: 1.4,
-        finBaseZ: 33.6, finBaseY: cy + 2.3, finHeight: 9.4,
+        screenScale: SCNVector3(0.88, 0.72, 1.7),
+        screenPos: SCNVector3(0, cy + 1.55, -31.4),
+        wingSpan: 64.8, wingRootChord: 13.5, wingTipChord: 2.2, wingSweep: 15.5,
+        wingThickness: 0.8, wingY: 2.15, wingTE_Z: 6.5,
+        // Raked tips: long, low, minimal cant (swept-back near-flat extension).
+        wingHalfSpan: 31.6, tipHeight: 0.55, tipChordFwd: 3.4, tipCant: 0.16,
+        lowerFenceHeight: nil,
+        // GE90: enormous nacelles slung forward + low, well ahead of the wing.
+        engineXs: [10.6], fanRadius: 1.65, nacelleZ: -4.2, nacelleY: 1.55,
+        nacelleLen: 7.6, intakeZ: -7.6, exhaustZ: 1.2, inletFlatten: 1.0,
+        finBaseZ: 33.6, finBaseY: cy + 2.3, finHeight: 9.6,
         finRootChord: 8.6, finMidChord: 4.2, finThickness: 0.52,
-        rudderHeight: 8.2, rudderChord: 2.2,
+        rudderHeight: 8.4, rudderChord: 2.2,
         stabSpan: 21.5, stabRootChord: 5.6, stabTipChord: 1.8, stabSweep: 4.6,
         stabThickness: 0.38, stabY: cy + 0.9, stabTE_Z: 33.4,
         ailCenterX: 26.5, ailSpan: 5.2, ailChord: 1.4,
         flapCenterX: 12.5, flapSpan: 11.0, flapChord: 2.6,
         surfThickness: 0.24,
-        // Gear pivots sit so tire contact lands at y ≈ 0 (pivotY = strut + wheelR).
-        noseZ: -27.5, nosePivotY: 2.67, noseStrutLen: 2.05,
+        // Tall gear so the GE90s clear the ramp. Six-wheel (3-row) main bogies.
+        noseZ: -27.0, nosePivotY: 2.82, noseStrutLen: 2.2,
         noseWheelR: 0.62, noseWheelW: 0.24,
-        mainX: 4.4, mainZ: 10.5, mainPivotY: 2.77, mainStrutLen: 2.05,
+        mainX: 4.4, mainZ: 10.5, mainPivotY: 2.92, mainStrutLen: 2.2,
         mainWheelR: 0.72, mainWheelW: 0.30, mainBogieRows: 3, mainLegXs: [4.4],
+        exposedMainWheelZ: nil,
         light: LightSpec(
-            navLeft: SCNVector3(-32.4, 1.9, 5.5),
-            navRight: SCNVector3(32.4, 1.9, 5.5),
+            navLeft: SCNVector3(-32.4, 2.15, 5.5),
+            navRight: SCNVector3(32.4, 2.15, 5.5),
             tail: SCNVector3(0, cy + 2.1, 37.4),
             beacon: SCNVector3(0, cy + 3.0, 2.0),
             landing: SCNVector3(0, 1.4, 7.5)),
@@ -522,56 +602,66 @@ func buildBoeing777(livery: Livery) -> CraftParts {
 
 // MARK: - Airbus A380-800 (DOUBLE-DECK, 4 engines, the whale)
 
-/// A380-800 — span 79.8 m, len 72.7 m. Full double-deck fuselage, four huge
-/// under-wing turbofans, four-wheel + six-wheel main bogies. The double-deck
-/// tube + FOUR engines make the silhouette unmistakable.
+/// A380-800 — span 79.75 m, len 72.7 m, height 24.1 m. The whale. A full-length
+/// DOUBLE-DECK ovoid fuselage (two stacked tubes; taller than it is wide, widest
+/// at the main-deck floor) with the bulbous whale nose and the flight deck set
+/// LOW between the decks. FOUR under-wing turbofans (two per wing, inboard +
+/// outboard). Up-AND-down wingtip FENCES (not tall winglets). A colossal broad,
+/// low-aspect wing capped to the 80 m airport box, and a 24 m tail. Main gear =
+/// two wing bogies + two body bogies per the reference (approximated as two 2-row
+/// bogies per side at two stations).
 func buildAirbus380(livery: Livery) -> CraftParts {
-    let cy: Float = 3.4
-    let r: Float = 3.6    // main-deck radius (widest fuselage in service)
-    // Main tube: −36.0 (nose) → +36.7 (tail). Length ≈ 72.7 m.
+    let cy: Float = 3.7    // main-deck centreline
+    let r: Float = 3.65    // main-deck radius (widest fuselage in service)
+    // Main (lower) tube: −36.0 (whale nose) → +36.7 (upswept tail). Len ≈ 72.7.
     let fuselage: [(z: Float, r: Float)] = [
-        (-36.0, 0.16), (-35.3, 1.0), (-33.6, 2.0), (-30.6, 2.9),
+        (-36.0, 0.55), (-35.0, 1.6), (-33.2, 2.6), (-30.4, 3.25),
         (-25.5, r), (-6.0, r), (14.0, r), (23.0, r * 0.94),
-        (30.0, r * 0.68), (34.0, r * 0.40), (36.7, 0.18)]
-    // Upper deck: a shorter, higher, slightly narrower tube stacked on top so the
-    // classic full-length double-deck bulge reads from any cab angle.
+        (30.0, r * 0.66), (34.0, r * 0.38), (36.7, 0.18)]
+    // Upper deck: a full-length higher tube stacked on top, running nearly the
+    // whole body so the double-deck bulge + twin window rows read from any angle.
+    // It stops short of the far-forward nose (upper deck doesn't reach as far
+    // forward as the lower) and tapers into the tail.
     let upper: [(z: Float, r: Float)] = [
-        (-30.0, 0.2), (-28.5, 1.3), (-26.0, 2.0), (-22.0, 2.35),
-        (-6.0, 2.45), (12.0, 2.45), (20.0, 2.1), (25.0, 1.4), (28.5, 0.5)]
+        (-31.0, 0.3), (-29.5, 1.5), (-27.0, 2.35), (-23.0, 2.75),
+        (-6.0, 2.85), (12.0, 2.85), (20.0, 2.5), (26.0, 1.7), (30.0, 0.6)]
     let spec = AirlinerSpec(
         kind: .airbus380,
         fuselage: fuselage, cy: cy, fuseSegments: 44,
-        upperDeck: upper, upperDeckCY: cy + 2.65,
-        screenScale: SCNVector3(1.0, 0.85, 1.7),
-        screenPos: SCNVector3(0, cy + 3.4, -28.5),
-        wingSpan: 79.8, wingRootChord: 13.5, wingTipChord: 2.8, wingSweep: 15.0,
-        wingThickness: 0.9, wingY: 2.5, wingTE_Z: 5.0,
-        wingHalfSpan: 38.9, tipHeight: 1.6, tipChordFwd: 2.6, tipCant: 0.9,
-        // FOUR engines: inboard + outboard on each side.
-        engineXs: [10.5, 20.5], fanRadius: 1.55, nacelleZ: -4.0, nacelleY: 1.65,
-        nacelleLen: 6.8, intakeZ: -7.0, exhaustZ: 0.9,
-        finBaseZ: 32.5, finBaseY: cy + 3.2, finHeight: 11.0,
+        upperDeck: upper, upperDeckCY: cy + 3.0,
+        // Cockpit set LOW and forward under the bulbous forehead (between decks).
+        screenScale: SCNVector3(1.05, 0.7, 1.5),
+        screenPos: SCNVector3(0, cy + 1.9, -29.5),
+        wingSpan: 79.75, wingRootChord: 15.0, wingTipChord: 3.0, wingSweep: 17.0,
+        wingThickness: 0.95, wingY: 3.3, wingTE_Z: 5.0,
+        // Wingtip FENCES: a short upright fin PLUS a mirrored lower fin.
+        wingHalfSpan: 38.9, tipHeight: 1.3, tipChordFwd: 2.6, tipCant: 0.35,
+        lowerFenceHeight: 0.9,
+        // FOUR engines: inboard (under the thick root) + outboard (toward tip).
+        engineXs: [10.5, 20.5], fanRadius: 1.5, nacelleZ: -4.2, nacelleY: 2.05,
+        nacelleLen: 6.8, intakeZ: -7.2, exhaustZ: 0.9, inletFlatten: 1.0,
+        finBaseZ: 32.5, finBaseY: cy + 3.4, finHeight: 11.2,
         finRootChord: 9.4, finMidChord: 4.6, finThickness: 0.56,
-        rudderHeight: 9.6, rudderChord: 2.4,
+        rudderHeight: 9.8, rudderChord: 2.4,
         stabSpan: 30.4, stabRootChord: 6.6, stabTipChord: 2.0, stabSweep: 5.4,
-        stabThickness: 0.42, stabY: cy + 1.5, stabTE_Z: 32.0,
+        stabThickness: 0.42, stabY: cy + 1.6, stabTE_Z: 32.0,
         ailCenterX: 32.0, ailSpan: 6.4, ailChord: 1.6,
         flapCenterX: 13.5, flapSpan: 13.0, flapChord: 3.0,
         surfThickness: 0.26,
-        // Gear pivots sit so tire contact lands at y ≈ 0 (pivotY = strut + wheelR).
-        noseZ: -25.5, nosePivotY: 3.11, noseStrutLen: 2.45,
+        noseZ: -25.5, nosePivotY: 3.26, noseStrutLen: 2.6,
         noseWheelR: 0.66, noseWheelW: 0.26,
-        // Two main legs per side: inner "body" bogie (6-wheel) + outer "wing"
-        // bogie (4-wheel). We approximate both as 2-row bogies at two stations.
-        mainX: 3.6, mainZ: 9.0, mainPivotY: 3.18, mainStrutLen: 2.5,
+        // Two main legs per side: inner "body" bogie + outer "wing" bogie, both
+        // approximated as 2-row bogies at two stations.
+        mainX: 3.6, mainZ: 9.0, mainPivotY: 3.36, mainStrutLen: 2.68,
         mainWheelR: 0.68, mainWheelW: 0.28, mainBogieRows: 2, mainLegXs: [3.6, 6.2],
+        exposedMainWheelZ: nil,
         light: LightSpec(
-            navLeft: SCNVector3(-39.9, 2.5, 3.5),
-            navRight: SCNVector3(39.9, 2.5, 3.5),
+            navLeft: SCNVector3(-39.9, 3.3, 3.5),
+            navRight: SCNVector3(39.9, 3.3, 3.5),
             tail: SCNVector3(0, cy + 2.6, 36.8),
-            beacon: SCNVector3(0, cy + 6.0, 2.0),
-            landing: SCNVector3(0, 1.6, 6.0)),
-        shadowSpan: 79.8, shadowLen: 72.7,
+            beacon: SCNVector3(0, cy + 6.4, 2.0),
+            landing: SCNVector3(0, 1.8, 6.0)),
+        shadowSpan: 79.75, shadowLen: 72.7,
         smokeOffset: SCNVector3(0, 1.0, 9.0))
     return buildAirliner(spec, livery: livery)
 }
