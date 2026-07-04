@@ -17,7 +17,7 @@ final class GameViewController: UIViewController {
     private var cameraRig: CameraRig!
     private var displayLink: CADisplayLink?
 
-    private let airport = AirportLayout.kavx
+    private let airport = AirportLayout.kjfk
     private var engine: SimEngine?
     private var entities: [AircraftID: AircraftEntity] = [:]
     private let uiState = UIState()
@@ -69,7 +69,9 @@ final class GameViewController: UIViewController {
         cameraRig = CameraRig(airport: airport, mount: world.cabMount)
         if let cam = cameraRig.camera { world.sky.configure(camera: cam) }
         scnView.pointOfView = cameraRig.cameraNode
-        cameraRig.attachGestures(to: scnView)
+        // Attach look/zoom gestures to the ROOT view (ancestor of both the scene
+        // view and the SwiftUI HUD) so drags aren't swallowed by the HUD overlay.
+        cameraRig.attachGestures(to: view)
 
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
         scnView.addGestureRecognizer(tap)

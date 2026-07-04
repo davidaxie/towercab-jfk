@@ -85,6 +85,9 @@ final class Aircraft {
     /// B2/merge — staggered downwind station a go-around rejoins at, so two
     /// rejoining aircraft never stack on the entry point.
     var rejoinEntryStation: Double = .nan
+    /// merge — vertical tier (0,1,2…) a go-around transits its rejoin at, so
+    /// simultaneous go-arounds stack in altitude and never overlap in the air.
+    var gaTransitTier: Int = 0
     var apronSpot: Int = -1
     var preRollPause: Double = 0     // seconds left before brake release
     var lineupComplete = false

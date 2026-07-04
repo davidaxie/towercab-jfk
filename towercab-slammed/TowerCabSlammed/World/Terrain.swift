@@ -4,39 +4,62 @@ import UIKit
 import simd
 
 // =============================================================================
-// Terrain — the Pacific (living water, D3), the mesa with its 488 m cliffs and
-// fBm rim (A11/D4), foam rings at the cliff base, Catalina's painterly
-// interior ridges rising ESE/SE (A11/D11), a barely-there mainland band on the
-// NE horizon (D14), and the marine-layer bank offshore WNW (real geography).
-// Distant landforms are faceted low-poly meshes that hold color, not detail;
-// aerial haze (scene fog) does the rest.
+// Terrain — KJFK, the Bay Runway diorama. Everything procedural, no assets.
+//
+// JFK is FLAT, WIDE, WATERY, urban-adjacent. This file paints:
+//   • a DEAD-FLAT pale expanse at the field datum (y=0) — grooved-concrete-adjacent
+//     apron/infield land skirting the runway, sampling airport.groundHeight (flat=0);
+//   • JAMAICA BAY — one big living water plane at y = -mesaDropMeters (≈ -4) with a
+//     warm golden-hour sheen + a sun sparkle lane, wrapping the field to the
+//     south / southwest / west, with a few low marsh-island hints riding it;
+//   • a salt-marsh / land + haze band to the north & east (dry land side);
+//   • a distant HAZY MANHATTAN SKYLINE — a cluster of procedural tower rectangles
+//     of varied heights ~13 mi to the NW on the horizon, pre-warmed into the haze;
+//   • salt/aerial haze so the far field dissolves into the sky (scene fog does
+//     the rest; distant slabs are pre-lerped toward the horizon color).
+//
+// World convention (SimTypes): meters, Y up, North = -Z, East = +X. The active
+// runway lands NW (301° true): `landDir` = headingDirection(301°). The terminal
+// (NE) side is +perpSE; the bay (SW) side is -perpSE. Water fills the compass
+// south / southwest / west sectors; Manhattan sits NW past the field.
+//
+// Keep the warm "Luminous Diorama" look: pale concrete-grey land, warm-teal bay
+// water lit low from the WSW, amber haze, urban silhouette. Performant — big flat
+// planes, faceted low-poly islands/towers that hold color not detail, aerial haze
+// (scene fog) reading the far forms as simple shapes.
 // =============================================================================
 
 enum WorldTerrainBuilder {
 
     static func build(into root: SCNNode, airport: AirportLayout) {
-        root.addChildNode(oceanNode(airport: airport))
-        root.addChildNode(shallowsNode(airport: airport))     // turquoise cove band
-        root.addChildNode(foamNode(airport: airport))
-        root.addChildNode(mesaTopNode(airport: airport))
-        root.addChildNode(grassWashNode(airport: airport))    // hue zones over the turf
-        root.addChildNode(cliffNode(airport: airport))
-        root.addChildNode(foothillsNode(airport: airport))    // rolling mid-distance ESE
-        root.addChildNode(ridgesNode(airport: airport))
-        root.addChildNode(boatsNode(airport: airport))        // vessels + sunlit wakes
-        root.addChildNode(mainlandNode())
-        root.addChildNode(marineLayerNode())
+        root.addChildNode(bayWaterNode(airport: airport))     // Jamaica Bay — living water plane
+        root.addChildNode(fieldPlateNode(airport: airport))   // the flat pale field expanse
+        root.addChildNode(shoreFoamNode(airport: airport))    // soft foam where land meets bay
+        root.addChildNode(marshIslandsNode(airport: airport)) // low salt-marsh island hints on the bay
+        root.addChildNode(landBandNode(airport: airport))     // dry land / haze band N & E
+        root.addChildNode(manhattanNode(airport: airport))    // distant hazy skyline, NW horizon
+        root.addChildNode(boatsNode(airport: airport))        // a few small craft + sunlit wakes
+        root.addChildNode(saltHazeNode(airport: airport))     // low aerial-haze bands over the far bay
     }
 
-    // MARK: - Ocean (D3 — de-periodized swell, depth gradient, sparkle lane)
+    // MARK: - Geometry frame helpers (compass bearings → world XZ)
 
-    private static func oceanNode(airport: AirportLayout) -> SCNNode {
+    /// Unit direction for a compass bearing in degrees (0 = N = -Z, 90 = E = +X).
+    private static func bearing(_ deg: Double) -> V2 { headingDirection(degToRad(deg)) }
+
+    // MARK: - Jamaica Bay (D3 lineage — de-periodized swell, warm sheen, sparkle
+    // lane toward the low WSW sun). One large flat plane at the water datum. The
+    // field plate above it hides the water under the airfield; the bay shows to
+    // the south / southwest / west and out to the horizon.
+
+    private static func bayWaterNode(airport: AirportLayout) -> SCNNode {
         let material = SCNMaterial()
         material.lightingModel = .physicallyBased
-        material.diffuse.contents = worldColor(0.085, 0.24, 0.30)
-        material.roughness.contents = 0.12
+        // Warm coastal bay teal (a touch greener/siltier than open Pacific).
+        material.diffuse.contents = worldColor(0.075, 0.205, 0.235)
+        material.roughness.contents = 0.14
         material.metalness.contents = 0.0
-        material.setValue(NSNumber(value: 0.30), forKey: "rippleGain")
+        material.setValue(NSNumber(value: 0.26), forKey: "rippleGain")
         material.shaderModifiers = [.surface: """
             #pragma arguments
             float rippleGain;
@@ -44,211 +67,95 @@ enum WorldTerrainBuilder {
             float3 wpos = (scn_frame.inverseViewTransform * float4(_surface.position, 1.0)).xyz;
             float t = scn_frame.time;
             float2 p = wpos.xz;
-            // Octave 1 — long swell.
-            float a1 = sin(p.x * 0.019 + t * 0.55 + sin(p.y * 0.011 + t * 0.30) * 1.7);
-            float a2 = sin(p.y * 0.023 - t * 0.45 + sin(p.x * 0.013 - t * 0.26) * 1.5);
-            // Octave 2 — chop, rotated ~23° so the sets never align (D3).
+            // Octave 1 — long, gentle bay swell (shorter fetch than open ocean).
+            float a1 = sin(p.x * 0.021 + t * 0.50 + sin(p.y * 0.013 + t * 0.28) * 1.6);
+            float a2 = sin(p.y * 0.025 - t * 0.42 + sin(p.x * 0.015 - t * 0.24) * 1.4);
+            // Octave 2 — wind chop, rotated ~23° so sets never align.
             float2 q = float2(p.x * 0.9205 - p.y * 0.3907, p.x * 0.3907 + p.y * 0.9205);
-            float b1 = sin(q.x * 0.11 + q.y * 0.07 + t * 1.35);
-            float b2 = sin(q.x * 0.09 - q.y * 0.13 + t * 1.05);
+            float b1 = sin(q.x * 0.12 + q.y * 0.08 + t * 1.30);
+            float b2 = sin(q.x * 0.10 - q.y * 0.14 + t * 1.00);
             // Octave 3 — mid-scale confusion.
-            float c1 = sin(p.x * 0.052 - p.y * 0.041 + t * 0.85);
-            float c2 = sin(p.y * 0.047 + p.x * 0.036 - t * 0.72);
+            float c1 = sin(p.x * 0.055 - p.y * 0.043 + t * 0.82);
+            float c2 = sin(p.y * 0.049 + p.x * 0.038 - t * 0.70);
             float dist = length(_surface.position.xyz);
-            float g = rippleGain / (1.0 + dist * 0.00030);
+            float g = rippleGain / (1.0 + dist * 0.00034);
             float3 wn = normalize(float3((a1 * 0.50 + b1 * 0.30 + c1 * 0.20) * g, 1.0,
                                          (a2 * 0.50 + b2 * 0.30 + c2 * 0.20) * g));
             _surface.normal = normalize((scn_frame.viewTransform * float4(wn, 0.0)).xyz);
-            // Distance color gradient: coastal teal into deep channel blue.
-            float dm = clamp(dist / 9000.0, 0.0, 1.0);
-            _surface.diffuse.rgb = mix(float3(0.085, 0.24, 0.30), float3(0.045, 0.13, 0.22), dm);
-            // Animated sparkle lane toward the low WSW sun, gated by hash noise.
+            // Depth gradient: siltier warm-teal shallows near the field into a
+            // cooler channel blue farther out toward the Rockaways/Atlantic.
+            float dm = clamp(dist / 11000.0, 0.0, 1.0);
+            _surface.diffuse.rgb = mix(float3(0.090, 0.215, 0.235),
+                                       float3(0.050, 0.135, 0.205), dm);
+            // Warm sunset sheen: a broad low-frequency amber wash rising toward
+            // the WSW sun so the whole sheet catches golden-hour light, not just
+            // the sparkle lane.
             float3 cam = scn_frame.inverseViewTransform[3].xyz;
             float2 vd = p - cam.xz;
             float vl = max(length(vd), 1.0);
-            float lane = pow(max(dot(vd / vl, float2(-0.921, 0.391)), 0.0), 30.0);
-            float2 cell = floor(p * 0.35 + float2(t * 0.9, -t * 0.7));
+            float2 sunDir = float2(-0.940, -0.342);        // ~WSW (247° compass)
+            float toward = max(dot(vd / vl, sunDir), 0.0);
+            _surface.diffuse.rgb += float3(0.16, 0.10, 0.045) * pow(toward, 2.2);
+            // Animated sparkle lane toward the low WSW sun, gated by hash noise.
+            float lane = pow(toward, 28.0);
+            float2 cell = floor(p * 0.32 + float2(t * 0.85, -t * 0.65));
             float hash = fract(sin(dot(cell, float2(127.1, 311.7))) * 43758.5453);
             float sparkle = step(0.93, hash) * lane;
-            _surface.emission.rgb += float3(1.0, 0.78, 0.48) * sparkle * 0.8;
+            _surface.emission.rgb += float3(1.0, 0.80, 0.50) * sparkle * 0.85;
             """]
 
-        let plane = SCNPlane(width: 62_000, height: 62_000)
+        // A huge plane so the bay reaches the fog horizon in every direction; the
+        // field plate above masks the middle where the airfield sits.
+        let plane = SCNPlane(width: 64_000, height: 64_000)
         plane.materials = [material]
         let node = SCNNode(geometry: plane)
-        node.name = "ocean"
+        node.name = "bayWater"
         node.eulerAngles.x = -.pi / 2
         node.position = SCNVector3(0, Float(-airport.mesaDropMeters), 0)
         node.castsShadow = false
+        node.renderingOrder = -50           // draw before the field plate & foam
         return node
     }
 
-    // MARK: - Foam rings at the cliff base (D3)
+    // MARK: - The flat field plate (the dead-flat pale expanse the airfield sits
+    // on). Samples groundHeight (flat → 0) so it agrees with the sim datum. A
+    // broad tessellated disc lifted a hair above the water so it never z-fights
+    // the bay; its rim drops as a thin bevel to the waterline so the field reads
+    // as fortified fill projecting into the bay (the real Bay-Runway character).
 
-    private static func foamNode(airport: AirportLayout) -> SCNNode {
-        let outline = airport.mesaOutline
-        var centroid = V2(0, 0)
-        for p in outline { centroid += p }
-        centroid /= Double(outline.count)
-        let container = SCNNode()
-        container.name = "foam"
-
-        func ring(offset: Double, width: Double, opacity: CGFloat, scroll: Double) -> SCNNode {
-            let material = SCNMaterial()
-            material.lightingModel = .constant
-            material.diffuse.contents = WorldTex.foamBand()
-            material.diffuse.wrapS = .repeat
-            material.diffuse.wrapT = .repeat
-            material.blendMode = .alpha
-            material.writesToDepthBuffer = false
-            material.isDoubleSided = true
-            material.setValue(NSNumber(value: scroll), forKey: "scrollRate")
-            material.shaderModifiers = [.geometry: """
-                #pragma arguments
-                float scrollRate;
-                #pragma body
-                _geometry.texcoords[0].y += scn_frame.time * scrollRate;
-                """]
-            var mesh = WorldMesh()
-            let up = SIMD3<Float>(0, 1, 0)
-            let y = -airport.mesaDropMeters + 0.7          // −487.6
-            var prevIn: Int32 = -1, prevOut: Int32 = -1
-            var perimeter = 0.0
-            // Close the loop with duplicated first-point vertices whose v
-            // CONTINUES past the last column (no texture smear at the seam).
-            for i in 0...outline.count {
-                let p = outline[i % outline.count]
-                if i > 0 { perimeter += simd_length(p - outline[i - 1]) }
-                let outward = simd_normalize(p - centroid)
-                let inner = p + outward * offset
-                let outer = p + outward * (offset + width)
-                let v = Float(perimeter / 55.0)
-                let ii = mesh.add(worldF3(inner, y), up, SIMD2(0, v))
-                let oi = mesh.add(worldF3(outer, y), up, SIMD2(1, v))
-                if prevIn >= 0 { mesh.quad(prevIn, prevOut, oi, ii, desiredNormal: up) }
-                prevIn = ii; prevOut = oi
-            }
-            let node = SCNNode(geometry: mesh.build(material: material))
-            node.opacity = opacity
-            node.castsShadow = false
-            return node
-        }
-        container.addChildNode(ring(offset: 18, width: 26, opacity: 0.35, scroll: 0.014))
-        container.addChildNode(ring(offset: 73, width: 34, opacity: 0.15, scroll: -0.009))
-        return container
-    }
-
-    // MARK: - Shallow-water band (turquoise ring just outside the foam so the
-    // cliff base reads as sunlit reef shallows dropping into channel blue, not a
-    // hard foam/deep-water seam). Wider and brightest in the two coves.
-
-    private static func shallowsNode(airport: AirportLayout) -> SCNNode {
+    private static func fieldPlateNode(airport: AirportLayout) -> SCNNode {
         let outline = airport.mesaOutline
         var centroid = V2(0, 0)
         for p in outline { centroid += p }
         centroid /= Double(outline.count)
 
-        let material = SCNMaterial()
-        material.lightingModel = .constant
-        material.blendMode = .alpha
-        material.writesToDepthBuffer = false
-        material.isDoubleSided = true
-
-        // Mean radius so we can detect coves as radial dips (the outline's two
-        // coves pull inward; a notch = a wider, brighter shallow apron). This
-        // is frame-agnostic, so it matches whatever coves the outline carries.
-        var meanR = 0.0
-        for p in outline { meanR += simd_length(p - centroid) }
-        meanR /= Double(outline.count)
+        // Pale grooved-concrete land material — cool light grey with a warm cast,
+        // a faint grid so it reads as ramp/apron concrete rather than blank paper.
+        let material = WorldMat.pbr(fieldConcreteTex(), roughness: 0.94, wrap: true)
+        material.diffuse.contentsTransform = SCNMatrix4MakeScale(1.0 / 120.0, 1.0 / 120.0, 1)
 
         var mesh = WorldMesh()
         let up = SIMD3<Float>(0, 1, 0)
-        let y = -airport.mesaDropMeters + 0.4
         let n = outline.count
-        var prevIn: Int32 = -1, prevOut: Int32 = -1
-        for i in 0...n {
-            let p = outline[i % n]
-            let outward = simd_normalize(p - centroid)
-            // Cove factor: how far this point is pulled inside the mean radius.
-            let r = simd_length(p - centroid)
-            let cove = max(0.0, min(1.0, (meanR - r) / (meanR * 0.14)))
-            let inner = p + outward * 44.0
-            let outer = p + outward * (60.0 + 130.0 * cove)
-            let ii = mesh.add(worldF3(inner, y), up, SIMD2<Float>(0, 0))
-            let oi = mesh.add(worldF3(outer, y), up, SIMD2<Float>(1, 0))
-            if prevIn >= 0 { mesh.quad(prevIn, prevOut, oi, ii, desiredNormal: up) }
-            prevIn = ii; prevOut = oi
-        }
-        // Ramp opacity across the band width via a 1-D gradient in the diffuse
-        // alpha: bright turquoise at the cliff, dissolving to nothing outward.
-        material.diffuse.contents = WorldTerrainBuilder.shallowGradient()
-        material.diffuse.wrapS = .clamp
-        material.diffuse.wrapT = .clamp
-        let node = SCNNode(geometry: mesh.build(material: material))
-        node.name = "shallows"
-        node.opacity = 0.5
-        node.castsShadow = false
-        return node
-    }
-
-    /// 1-D turquoise→clear gradient (u across the shallow band). Inline texture
-    /// so we never touch WorldMaterials.swift.
-    private static func shallowGradient() -> UIImage {
-        WorldTex.image(CGSize(width: 64, height: 4), opaque: false) { ctx, size in
-            let colors = [worldColor(0.30, 0.62, 0.60, 0.85).cgColor,
-                          worldColor(0.24, 0.54, 0.55, 0.35).cgColor,
-                          worldColor(0.10, 0.30, 0.38, 0.0).cgColor] as CFArray
-            if let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                                     colors: colors, locations: [0, 0.5, 1]) {
-                ctx.drawLinearGradient(grad, start: .zero,
-                                       end: CGPoint(x: size.width, y: 0), options: [])
-            }
-        }
-    }
-
-    // MARK: - Mesa top (A11 — samples groundHeight: hump profile + knolls)
-
-    private static func mesaTopNode(airport: AirportLayout) -> SCNNode {
-        let outline = airport.mesaOutline
-        var centroid = V2(0, 0)
-        for p in outline { centroid += p }
-        centroid /= Double(outline.count)
-
-        var mesh = WorldMesh()
-        let rings = 9
-        let n = outline.count
-        let uvScale: Float = 1.0 / 42.0
-        func vertex(_ p: V2) -> Int32 {
-            let y = airport.groundHeight(at: p)
-            // Numeric normal — the profile is piecewise and carries knolls.
-            let d = 6.0
-            let hx = (airport.groundHeight(at: p + V2(d, 0)) - airport.groundHeight(at: p - V2(d, 0))) / (2 * d)
-            let hz = (airport.groundHeight(at: p + V2(0, d)) - airport.groundHeight(at: p - V2(0, d))) / (2 * d)
-            let normal = simd_normalize(SIMD3<Float>(Float(-hx), 1, Float(-hz)))
-            return mesh.add(worldF3(p, y), normal,
-                            SIMD2(Float(p.x) * uvScale, Float(p.y) * uvScale))
-        }
-        // Ring 0 = centroid alone; rings 1...R interpolate out to the rim.
-        let centerIdx = vertex(centroid)
+        let rings = 6
+        let lift = 0.12                                   // sit just above the bay
+        // Center + concentric rings out to the outline, all flat at y = ground+lift.
+        let centerIdx = mesh.add(worldF3(centroid, airport.groundHeight(at: centroid) + lift),
+                                 up, SIMD2<Float>(Float(centroid.x), Float(centroid.y)))
         var ringIdx: [[Int32]] = []
         for r in 1...rings {
             let f = Double(r) / Double(rings)
             var ring: [Int32] = []
             for i in 0..<n {
-                ring.append(vertex(centroid + (outline[i] - centroid) * f))
+                let q = centroid + (outline[i] - centroid) * f
+                let y = airport.groundHeight(at: q) + lift
+                ring.append(mesh.add(worldF3(q, y), up, SIMD2<Float>(Float(q.x), Float(q.y))))
             }
             ringIdx.append(ring)
         }
-        let up = SIMD3<Float>(0, 1, 0)
         for i in 0..<n {
             let j = (i + 1) % n
-            let a = centerIdx, b = ringIdx[0][i], c = ringIdx[0][j]
-            let pa = mesh.positions[Int(a)], pb = mesh.positions[Int(b)], pc = mesh.positions[Int(c)]
-            if simd_dot(simd_cross(pb - pa, pc - pa), up) >= 0 {
-                mesh.triangle(a, b, c)
-            } else {
-                mesh.triangle(a, c, b)
-            }
+            mesh.triangle(centerIdx, ringIdx[0][i], ringIdx[0][j])
         }
         for r in 0..<(rings - 1) {
             for i in 0..<n {
@@ -257,337 +164,390 @@ enum WorldTerrainBuilder {
                           desiredNormal: up)
             }
         }
-        let node = SCNNode(geometry: mesh.build(material: WorldMat.grass))
-        node.name = "mesaTop"
+        let node = SCNNode(geometry: mesh.build(material: material))
+        node.name = "fieldPlate"
+        node.renderingOrder = -20
+
+        // Thin bevel skirt from the field rim down to the waterline — the fill
+        // edge. A darker riprap tone so it reads as a built-up shore, not a cliff.
+        var skirt = WorldMesh()
+        let waterY = -airport.mesaDropMeters
+        var prevTop: Int32 = -1, prevBot: Int32 = -1
+        for i in 0...n {
+            let p = outline[i % n]
+            let outward = simd_normalize(p - centroid)
+            let top = mesh_addSkirt(&skirt, worldF3(p, airport.groundHeight(at: p) + lift), outward)
+            let botP = p + outward * 22.0                 // slope outward as it drops
+            let bot = mesh_addSkirt(&skirt, worldF3(botP, waterY - 0.2), outward)
+            if prevTop >= 0 {
+                skirt.quad(prevTop, prevBot, bot, top,
+                           desiredNormal: SIMD3(Float(outward.x), 0.35, Float(outward.y)))
+            }
+            prevTop = top; prevBot = bot
+        }
+        let skirtMat = WorldMat.pbr(worldColor(0.315, 0.300, 0.280), roughness: 0.98,
+                                    doubleSided: true)
+        let skirtNode = SCNNode(geometry: skirt.build(material: skirtMat))
+        skirtNode.name = "fieldFill"
+        skirtNode.castsShadow = false
+        skirtNode.renderingOrder = -20
+        node.addChildNode(skirtNode)
         return node
     }
 
-    // MARK: - Grass hue wash (breaks the muddy uniform khaki: cool green in the
-    // low swales, warm burnt-gold on the knoll crowns — soft, low-opacity color
-    // decals draped over the turf at 100-400 m scale, painterly not noisy).
-    // Additive/alpha color patches, sampling groundHeight so they hug the mesh.
+    private static func mesh_addSkirt(_ mesh: inout WorldMesh, _ p: SIMD3<Float>,
+                                      _ outward: V2) -> Int32 {
+        mesh.add(p, SIMD3(Float(outward.x), 0.4, Float(outward.y)), SIMD2<Float>(0, 0))
+    }
 
-    private static func grassWashNode(airport: AirportLayout) -> SCNNode {
+    /// Pale grooved-concrete field texture: cool light grey with a warm cast and
+    /// a faint slab/groove grid (tiles at 120 m). Salt-bleached, not pristine —
+    /// this is the flat land around the runway, not the runway itself.
+    private static func fieldConcreteTex() -> UIImage {
+        WorldTex.image(CGSize(width: 512, height: 512)) { ctx, size in
+            ctx.setFillColor(worldColor(0.585, 0.585, 0.575).cgColor)
+            ctx.fill(CGRect(origin: .zero, size: size))
+            // Broad tonal blotches so the huge plate never reads as one flat tile.
+            WorldTex.speckle(ctx, size: size, count: 42, seed: 0x1A5E, radius: 40...160,
+                             colors: [(worldColor(0.63, 0.62, 0.60), 0.16),
+                                      (worldColor(0.52, 0.52, 0.52), 0.14),
+                                      (worldColor(0.60, 0.57, 0.50), 0.09)], wrap: true)
+            // Fine aggregate grain.
+            WorldTex.speckle(ctx, size: size, count: 2200, seed: 0x1A5F, radius: 0.7...3.0,
+                             colors: [(worldColor(0.70, 0.69, 0.67), 0.08),
+                                      (worldColor(0.44, 0.44, 0.44), 0.08)], wrap: true)
+            // Faint slab-joint grid (~24 m cells at 120 m tile → 5 cells).
+            ctx.setStrokeColor(worldColor(0.40, 0.40, 0.39, 0.35).cgColor)
+            ctx.setLineWidth(1.6)
+            let cells = 5
+            for k in 0...cells {
+                let f = CGFloat(k) / CGFloat(cells)
+                ctx.move(to: CGPoint(x: f * size.width, y: 0))
+                ctx.addLine(to: CGPoint(x: f * size.width, y: size.height))
+                ctx.move(to: CGPoint(x: 0, y: f * size.height))
+                ctx.addLine(to: CGPoint(x: size.width, y: f * size.height))
+            }
+            ctx.strokePath()
+            // A hint of salt-marsh green creeping at random edges (the field is
+            // ringed by wet grass on its dry sides).
+            WorldTex.speckle(ctx, size: size, count: 120, seed: 0x1A60, radius: 6...26,
+                             colors: [(worldColor(0.40, 0.44, 0.30), 0.10),
+                                      (worldColor(0.46, 0.47, 0.34), 0.09)], wrap: true)
+        }
+    }
+
+    // MARK: - Shore foam (soft broken foam where the fill edge meets the bay —
+    // the D3 foam band reused as a thin alpha ribbon just outside the field rim,
+    // scrolling slowly so the waterline is alive).
+
+    private static func shoreFoamNode(airport: AirportLayout) -> SCNNode {
         let outline = airport.mesaOutline
         var centroid = V2(0, 0)
         for p in outline { centroid += p }
         centroid /= Double(outline.count)
-        var minX = Double.greatestFiniteMagnitude, maxX = -Double.greatestFiniteMagnitude
-        var minZ = Double.greatestFiniteMagnitude, maxZ = -Double.greatestFiniteMagnitude
-        for p in outline {
-            minX = min(minX, p.x); maxX = max(maxX, p.x)
-            minZ = min(minZ, p.y); maxZ = max(maxZ, p.y)
-        }
-        func inside(_ p: V2) -> Bool {
-            var hit = false; var j = outline.count - 1
-            for i in 0..<outline.count {
-                let a = outline[i], b = outline[j]
-                if (a.y > p.y) != (b.y > p.y),
-                   p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x { hit.toggle() }
-                j = i
-            }
-            return hit
-        }
-        let container = SCNNode()
-        var rng = WorldRand(seed: 0x6A5F)
-        // Radial-gradient discs so the washes feather to nothing at their edges.
-        func washTex(_ color: UIColor) -> UIImage {
-            WorldTex.image(CGSize(width: 64, height: 64), opaque: false) { ctx, size in
-                let cg = color.cgColor
-                let clear = color.withAlphaComponent(0).cgColor
-                if let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                                         colors: [cg, clear] as CFArray, locations: [0, 1]) {
-                    ctx.drawRadialGradient(grad,
-                        startCenter: CGPoint(x: size.width / 2, y: size.height / 2), startRadius: 0,
-                        endCenter: CGPoint(x: size.width / 2, y: size.height / 2),
-                        endRadius: size.width / 2, options: [])
-                }
-            }
-        }
-        func washMat(_ color: UIColor) -> SCNMaterial {
-            let m = SCNMaterial()
-            m.lightingModel = .constant
-            m.diffuse.contents = washTex(color)
-            m.blendMode = .alpha
-            m.writesToDepthBuffer = false
-            m.isDoubleSided = true
-            return m
-        }
-        // Elevation reference: the runway crest datum is y=0; knolls rise ~9-10 m.
-        // Green washes favor lower ground; gold favors the crowns.
-        let green = washMat(worldColor(0.30, 0.40, 0.20, 0.45))
-        let gold  = washMat(worldColor(0.56, 0.44, 0.24, 0.40))
-        let olive = washMat(worldColor(0.34, 0.38, 0.22, 0.42))
 
-        func drape(_ center: V2, radius: Double, mat: SCNMaterial) {
-            // Tessellated disc that samples groundHeight so it rides the hump.
+        let material = SCNMaterial()
+        material.lightingModel = .constant
+        material.diffuse.contents = WorldTex.foamBand()
+        material.diffuse.wrapS = .repeat
+        material.diffuse.wrapT = .repeat
+        material.blendMode = .alpha
+        material.writesToDepthBuffer = false
+        material.isDoubleSided = true
+        material.setValue(NSNumber(value: 0.010), forKey: "scrollRate")
+        material.shaderModifiers = [.geometry: """
+            #pragma arguments
+            float scrollRate;
+            #pragma body
+            _geometry.texcoords[0].y += scn_frame.time * scrollRate;
+            """]
+
+        var mesh = WorldMesh()
+        let up = SIMD3<Float>(0, 1, 0)
+        let y = -airport.mesaDropMeters + 0.25
+        let n = outline.count
+        var prevIn: Int32 = -1, prevOut: Int32 = -1
+        var perimeter = 0.0
+        for i in 0...n {
+            let p = outline[i % n]
+            if i > 0 { perimeter += simd_length(p - outline[(i - 1) % n]) }
+            let outward = simd_normalize(p - centroid)
+            // Sit the foam just past the fill toe (skirt reaches ~22 m out).
+            let inner = p + outward * 20.0
+            let outer = p + outward * 46.0
+            let v = Float(perimeter / 55.0)
+            let ii = mesh.add(worldF3(inner, y), up, SIMD2<Float>(0, v))
+            let oi = mesh.add(worldF3(outer, y), up, SIMD2<Float>(1, v))
+            if prevIn >= 0 { mesh.quad(prevIn, prevOut, oi, ii, desiredNormal: up) }
+            prevIn = ii; prevOut = oi
+        }
+        let node = SCNNode(geometry: mesh.build(material: material))
+        node.name = "shoreFoam"
+        node.opacity = 0.28
+        node.castsShadow = false
+        node.renderingOrder = -10
+        return node
+    }
+
+    // MARK: - Marsh islands (low salt-marsh island hints riding the bay to the
+    // SW / S / W — the Jamaica Bay Wildlife Refuge look: flat, barely-raised
+    // grassy shoals, a few hundred meters out, dissolving into haze). Faceted
+    // flat discs a hair above the water, warm marsh-green pre-lerped toward haze.
+
+    private static func marshIslandsNode(airport: AirportLayout) -> SCNNode {
+        let container = SCNNode()
+        let waterY = -airport.mesaDropMeters
+        // Bearings into the water sectors: SW, SSW, S, WSW, W.
+        struct Isle { let bearing: Double; let dist: Double; let rx: Double; let rz: Double
+                      let rot: Double; let seed: UInt64; let color: UIColor }
+        let isles: [Isle] = [
+            Isle(bearing: 218, dist: 2600, rx: 520, rz: 300, rot: 30,  seed: 0x51A1,
+                 color: worldColor(0.360, 0.400, 0.300)),
+            Isle(bearing: 200, dist: 3400, rx: 700, rz: 360, rot: -18, seed: 0x51A2,
+                 color: worldColor(0.345, 0.385, 0.295)),
+            Isle(bearing: 236, dist: 3000, rx: 460, rz: 260, rot: 52,  seed: 0x51A3,
+                 color: worldColor(0.370, 0.405, 0.305)),
+            Isle(bearing: 250, dist: 4200, rx: 820, rz: 380, rot: 8,   seed: 0x51A4,
+                 color: worldColor(0.400, 0.420, 0.330)),   // farther → hazier/tanner
+            Isle(bearing: 182, dist: 4600, rx: 640, rz: 300, rot: -40, seed: 0x51A5,
+                 color: worldColor(0.410, 0.425, 0.340)),
+            Isle(bearing: 268, dist: 5200, rx: 900, rz: 420, rot: 20,  seed: 0x51A6,
+                 color: worldColor(0.430, 0.435, 0.360)),
+        ]
+        for isle in isles {
+            var rng = WorldRand(seed: isle.seed)
+            let center = bearing(isle.bearing) * isle.dist
+            let axis = bearing(isle.rot)                  // long-axis direction
+            let across = V2(-axis.y, axis.x)
             var mesh = WorldMesh()
             let up = SIMD3<Float>(0, 1, 0)
-            let segs = 12
-            let cy = airport.groundHeight(at: center) + 0.09
-            let ci = mesh.add(worldF3(center, cy), up, SIMD2<Float>(0.5, 0.5))
+            let segs = 20
+            let y = waterY + 1.2                          // barely-raised shoal
+            let ci = mesh.add(worldF3(center, y), up, SIMD2<Float>(0.5, 0.5))
             var ring: [Int32] = []
             for k in 0...segs {
                 let a = Double(k) / Double(segs) * 2 * .pi
-                let q = center + V2(cos(a), sin(a)) * radius
-                let y = airport.groundHeight(at: q) + 0.09
+                // Jittered radius so the marsh reads as an irregular natural shoal.
+                let jit = 1.0 + rng.range(-0.22, 0.16)
+                let off = axis * (cos(a) * isle.rx * jit) + across * (sin(a) * isle.rz * jit)
                 let uvx = Float(0.5 + 0.5 * cos(a)), uvy = Float(0.5 + 0.5 * sin(a))
-                ring.append(mesh.add(worldF3(q, y), up, SIMD2<Float>(uvx, uvy)))
+                ring.append(mesh.add(worldF3(center + off, y), up, SIMD2<Float>(uvx, uvy)))
             }
-            for k in 0..<segs {
-                mesh.triangle(ci, ring[k], ring[k + 1])
-            }
-            container.addChildNode(SCNNode(geometry: mesh.build(material: mat)))
-        }
-
-        // Keep washes off the paved runway/ramp so no green tints the concrete.
-        let frame = FieldFrame(airport)
-        func onPavement(_ p: V2) -> Bool {
-            let st = frame.station(p)
-            if st.x > -20 && st.x < airport.runway.length + 20 && abs(st.y) < 18 { return true }
-            if st.x > 400 && st.x < 640 && st.y > 55 && st.y < 155 { return true }   // ramp/infield
-            return false
-        }
-        var placed = 0, attempts = 0
-        while placed < 30 && attempts < 2000 {
-            attempts += 1
-            let p = V2(rng.range(minX, maxX), rng.range(minZ, maxZ))
-            guard inside(centroid + (p - centroid) * 0.96), !onPavement(p) else { continue }
-            let elev = airport.groundHeight(at: p)
-            // Pick a wash by elevation: crowns (elev high, less negative) → gold;
-            // swales (more negative) → green; middle → olive.
-            let mat: SCNMaterial
-            if elev > -3 { mat = rng.unit() > 0.4 ? gold : olive }
-            else if elev < -9 { mat = rng.unit() > 0.4 ? green : olive }
-            else { mat = rng.unit() > 0.5 ? olive : green }
-            drape(p, radius: rng.range(55, 130), mat: mat)
-            placed += 1
+            for k in 0..<segs { mesh.triangle(ci, ring[k], ring[k + 1]) }
+            let mat = WorldMat.pbr(isle.color, roughness: 1.0, doubleSided: true)
+            let node = SCNNode(geometry: mesh.build(material: mat))
+            node.castsShadow = false
+            container.addChildNode(node)
         }
         let flat = container.flattenedClone()
-        flat.name = "grassWash"
+        flat.name = "marshIslands"
         flat.castsShadow = false
+        flat.renderingOrder = -15
         return flat
     }
 
-    // MARK: - Cliffs
+    // MARK: - Dry land band (the N & E sides — Queens/Long Island: a low, flat,
+    // hazy land mass wrapping the compass N through E, standing for the built-up
+    // shore feeding the field. Not water. A shallow ring segment of faceted land
+    // pre-lerped toward the dusk haze so it reads as a soft horizon, not a wall).
 
-    private static func cliffNode(airport: AirportLayout) -> SCNNode {
-        let outline = airport.mesaOutline
-        var centroid = V2(0, 0)
-        for p in outline { centroid += p }
-        centroid /= Double(outline.count)
-
-        var rng = WorldRand(seed: 0xC1FF)
+    private static func landBandNode(airport: AirportLayout) -> SCNNode {
+        var rng = WorldRand(seed: 0x1A4D)
         var mesh = WorldMesh()
-        let n = outline.count
-        let drop = airport.mesaDropMeters
-        // Depth fractions rim → waterline; each ring pulls inward and jitters,
-        // giving banded, faceted rock that slopes gently in toward the base.
-        let depths: [Double] = [0.0, 0.10, 0.30, 0.55, 0.82, 1.0]
-        let insets: [Double] = [0.0, 6, 16, 28, 42, 52]
-
-        // Precompute all ring points so quads share exact corners.
-        var ringPts: [[SIMD3<Float>]] = []
-        var ringUVu: [[Float]] = []
-        for (ri, depth) in depths.enumerated() {
-            var pts: [SIMD3<Float>] = []
-            var us: [Float] = []
-            var perimeter: Double = 0
-            for i in 0..<n {
-                let p = outline[i]
-                if i > 0 { perimeter += simd_length(outline[i] - outline[i - 1]) }
-                let inward = simd_normalize(centroid - p)
-                var jitterAmp = 14.0 * depth * (1 - depth) * 4
-                if ri == 0 || ri == depths.count - 1 { jitterAmp = 0 }
-                let jitter = rng.range(-jitterAmp, jitterAmp)
-                let q = p + inward * (insets[ri] + jitter)
-                let yTop = airport.groundHeight(at: p)
-                let y = yTop - (yTop + drop) * depth
-                pts.append(worldF3(q, y))
-                us.append(Float(perimeter / 55.0))
+        let waterY = -airport.mesaDropMeters
+        // Sweep the land arc from NW (330°) through N and E to SE (150°) — i.e.
+        // everything that ISN'T the bay (which owns S/SW/W). Two concentric
+        // radii so the land has a little depth and a low ragged crest.
+        let a0 = 330.0, a1 = 510.0                        // 330° → 150° (wrapping through 360)
+        let inner = 6500.0, outer = 12_000.0
+        let steps = 60
+        let crestBase = waterY + 6.0
+        var prevInner: SIMD3<Float>?
+        var prevMidTop: SIMD3<Float>?
+        for k in 0...steps {
+            let t = Double(k) / Double(steps)
+            let deg = a0 + (a1 - a0) * t
+            let dir = bearing(deg)
+            // Low ragged crest: a few octaves of gentle relief (30–90 m), never
+            // a hard wall — Queens is flat. Height rises a touch toward the NE.
+            let ridge = 0.5 + 0.28 * sin(deg * 0.09 + 0.7) + 0.14 * sin(deg * 0.031 + 2.0)
+            let h = crestBase + (30.0 + 70.0 * max(0.0, ridge)) * rng.range(0.7, 1.0)
+            let ip = dir * inner
+            let op = dir * outer
+            let innerV = worldF3(ip, waterY + 2.0)
+            let midTopV = worldF3((ip + op) * 0.5, h)
+            if let pi = prevInner, let pmt = prevMidTop {
+                let hint = worldF3(dir, 0.25)
+                // near flat apron (inner) up to the low crest (mid)
+                mesh.facet(pi, innerV, midTopV, hint: hint)
+                mesh.facet(pi, midTopV, pmt, hint: hint)
             }
-            ringPts.append(pts)
-            ringUVu.append(us)
+            prevInner = innerV; prevMidTop = midTopV
         }
-        for ri in 0..<(depths.count - 1) {
-            let v0 = Float(depths[ri]), v1 = Float(depths[ri + 1])
-            for i in 0..<n {
-                let j = (i + 1) % n
-                let a = ringPts[ri][i], b = ringPts[ri][j]
-                let c = ringPts[ri + 1][j], d = ringPts[ri + 1][i]
-                // Outward hint = away from centroid.
-                let mid = (a + b + c + d) / 4
-                let hint = simd_normalize(SIMD3<Float>(mid.x - Float(centroid.x), 0, mid.z - Float(centroid.y)))
-                let uA = ringUVu[ri][i]
-                var uB = ringUVu[ri][j]
-                if j == 0 {   // wrap seam: continue u past the last column
-                    uB = ringUVu[ri][i] + Float(simd_length(outline[0] - outline[n - 1]) / 55.0)
-                }
-                // Two flat-shaded triangles with matching UVs.
-                addCliffTri(&mesh, a, b, c, SIMD2(uA, v0), SIMD2(uB, v0), SIMD2(uB, v1), hint)
-                addCliffTri(&mesh, a, c, d, SIMD2(uA, v0), SIMD2(uB, v1), SIMD2(uA, v1), hint)
-            }
-        }
-        let node = SCNNode(geometry: mesh.build(material: WorldMat.cliff))
-        node.name = "cliffs"
-        return node
-    }
-
-    private static func addCliffTri(_ mesh: inout WorldMesh,
-                                    _ a: SIMD3<Float>, _ b: SIMD3<Float>, _ c: SIMD3<Float>,
-                                    _ uva: SIMD2<Float>, _ uvb: SIMD2<Float>, _ uvc: SIMD2<Float>,
-                                    _ hint: SIMD3<Float>) {
-        var nrm = simd_cross(b - a, c - a)
-        let len = simd_length(nrm)
-        nrm = len > 1e-6 ? nrm / len : hint
-        if simd_dot(nrm, hint) < 0 { nrm = -nrm }
-        let ia = mesh.add(a, nrm, uva)
-        let ib = mesh.add(b, nrm, uvb)
-        let ic = mesh.add(c, nrm, uvc)
-        // Winding consistent with the (possibly flipped) normal.
-        let geoN = simd_cross(b - a, c - a)
-        if simd_dot(geoN, nrm) >= 0 { mesh.triangle(ia, ib, ic) } else { mesh.triangle(ia, ic, ib) }
-    }
-
-    // MARK: - Interior ridges (A11 — the island rises ESE/SE; D11 — facets
-    // never band: 38 segments, shoulder pairs, per-facet albedo jitter via a
-    // multiply noise texture)
-
-    private struct RidgeSpec {
-        let bearingDeg: Double               // compass bearing from the field
-        let distance: Double
-        let spineBearingDeg: Double          // direction the crest line runs
-        let length: Double
-        let halfWidth: Double
-        let peak: Double                     // crest height above the field (y≈0)
-        let color: UIColor
-        let seed: UInt64
-    }
-
-    private static func ridgesNode(airport: AirportLayout) -> SCNNode {
-        // Mt Orizaba analog (639 m − 488 = 151 above field, ~3 km ESE),
-        // Black Jack analog (~123 above field, SE), a near saddle, a far ESE
-        // spine — and only low rolling forms NW toward the isthmus (A11).
-        // Farther ridges bake bluer.
-        let specs: [RidgeSpec] = [
-            .init(bearingDeg: 120, distance: 1900, spineBearingDeg: 108, length: 2600,
-                  halfWidth: 800, peak: 58, color: worldColor(0.438, 0.432, 0.286), seed: 11),
-            .init(bearingDeg: 105, distance: 3000, spineBearingDeg: 116, length: 4200,
-                  halfWidth: 1150, peak: 151, color: worldColor(0.442, 0.462, 0.338), seed: 23),
-            .init(bearingDeg: 138, distance: 4200, spineBearingDeg: 98, length: 3600,
-                  halfWidth: 950, peak: 123, color: worldColor(0.438, 0.474, 0.408), seed: 37),
-            .init(bearingDeg: 92, distance: 5700, spineBearingDeg: 120, length: 4800,
-                  halfWidth: 1100, peak: 132, color: worldColor(0.430, 0.488, 0.498), seed: 51),
-            // NW: gentle isthmus swells only.
-            .init(bearingDeg: 302, distance: 3900, spineBearingDeg: 310, length: 3000,
-                  halfWidth: 900, peak: 34, color: worldColor(0.455, 0.468, 0.360), seed: 63),
-            .init(bearingDeg: 322, distance: 5400, spineBearingDeg: 300, length: 3400,
-                  halfWidth: 950, peak: 27, color: worldColor(0.445, 0.475, 0.430), seed: 71),
-        ]
-        let container = SCNNode()
-        for spec in specs {
-            container.addChildNode(ridgeNode(spec: spec, baseY: -airport.mesaDropMeters))
-        }
-        let flat = container.flattenedClone()
-        flat.name = "ridges"
-        return flat
-    }
-
-    private static func ridgeNode(spec: RidgeSpec, baseY: Double) -> SCNNode {
-        var rng = WorldRand(seed: spec.seed)
-        let mid = headingDirection(degToRad(spec.bearingDeg)) * spec.distance
-        let axis = headingDirection(degToRad(spec.spineBearingDeg))
-        let across = V2(-axis.y, axis.x)
-
-        var mesh = WorldMesh()
-        let segments = 38                                  // D11: was 14 — banding killer
-        // Spine samples with jittered crest heights; ends taper to the water.
-        var spine: [(pos: V2, h: Double, w: Double)] = []
-        for k in 0...segments {
-            let t = Double(k) / Double(segments)
-            let along = (t - 0.5) * spec.length
-            let envelope = sin(.pi * t)
-            let bump = 1.0 + 0.55 * sin(t * 19.0 + rng.range(0, 6)) * rng.range(0.3, 1.0)
-            let h = max(6, spec.peak * pow(envelope, 0.72) * (0.72 + 0.28 * bump))
-            let lateral = rng.range(-0.14, 0.14) * spec.halfWidth
-            spine.append((mid + axis * along + across * lateral,
-                          h, spec.halfWidth * (0.35 + 0.65 * envelope)))
-        }
-        // Cross-section: base → shoulder → upper shoulder → crest, both sides
-        // (lateral shoulder pairs, D11). Fractions of (halfWidth, height).
-        let profile: [(w: Double, h: Double)] = [
-            (1.00, 0.0), (0.62, 0.36), (0.28, 0.74), (-0.06, 1.0),
-            (-0.34, 0.70), (-0.66, 0.32), (-1.00, 0.0),
-        ]
-        func uvPatch(_ r: inout WorldRand) -> SIMD2<Float> {
-            SIMD2(Float(r.range(0, 1)), Float(r.range(0, 1)))
-        }
-        for k in 0..<segments {
-            let (p0, h0, w0) = spine[k]
-            let (p1, h1, w1) = spine[k + 1]
-            for c in 0..<(profile.count - 1) {
-                let fa = profile[c], fb = profile[c + 1]
-                let a0 = worldF3(p0 + across * (w0 * fa.w), fa.h <= 0 ? baseY : baseY + (h0 - baseY) * fa.h)
-                let b0 = worldF3(p0 + across * (w0 * fb.w), fb.h <= 0 ? baseY : baseY + (h0 - baseY) * fb.h)
-                let a1 = worldF3(p1 + across * (w1 * fa.w), fa.h <= 0 ? baseY : baseY + (h1 - baseY) * fa.h)
-                let b1 = worldF3(p1 + across * (w1 * fb.w), fb.h <= 0 ? baseY : baseY + (h1 - baseY) * fb.h)
-                let hintSide = fa.w + fb.w >= 0 ? across : -across
-                let hint = worldF3(hintSide, 0.85)
-                let uv = uvPatch(&rng)
-                mesh.facet(a0, a1, b1, hint: hint, uv: uv, uvSpread: 0.02)
-                mesh.facet(a0, b1, b0, hint: hint, uv: uv + SIMD2(0.01, 0.01), uvSpread: 0.02)
-            }
-            // End caps.
-            if k == 0 || k == segments - 1 {
-                let (pc, hc, wc) = k == 0 ? spine[0] : spine[segments]
-                let capHint = worldF3(k == 0 ? -axis : axis, 0.3)
-                let crest = worldF3(pc + across * (wc * -0.06), baseY + (hc - baseY))
-                let l = worldF3(pc + across * wc, baseY)
-                let r = worldF3(pc - across * wc, baseY)
-                mesh.facet(l, crest, r, hint: capHint, uv: uvPatch(&rng), uvSpread: 0.02)
-            }
-        }
-        let material = WorldMat.pbr(spec.color, roughness: 0.95, doubleSided: true)
-        // Nearer ridges get chaparral stipple (mottled sage/olive/tan); the
-        // farther, bluer ridges keep the neutral value noise so haze reads them
-        // as simple forms. `distance` from ridgeNode's spec picks which.
-        material.multiply.contents = spec.distance < 4500
-            ? WorldTerrainBuilder.chaparralTex() : WorldTex.ridgeNoise()
-        material.multiply.wrapS = .repeat
-        material.multiply.wrapT = .repeat
+        // Pre-warmed toward the dusk haze so it never reads as a floating cutout.
+        let material = WorldMat.pbr(worldColor(0.560, 0.505, 0.480), roughness: 1.0,
+                                    doubleSided: true)
         let node = SCNNode(geometry: mesh.build(material: material))
-        // Treed silhouette: scatter a few dark canopy blobs along the crest of
-        // the two nearest chaparral ridges so the skyline isn't a bare arc.
-        if spec.distance < 3200 {
-            var trng = WorldRand(seed: spec.seed &+ 0x7EE)
-            let treeMat = WorldMat.pbr(worldColor(0.26, 0.31, 0.22), roughness: 1.0, doubleSided: true)
-            for k in stride(from: 3, to: segments - 3, by: 2) {
-                guard trng.unit() > 0.45 else { continue }
-                let (pc, hc, _) = spine[k]     // hc = absolute crest Y (above y=0 datum)
-                let clump = SCNNode()
-                let lobes = 2 + trng.int(2)
-                for _ in 0..<lobes {
-                    let rad = trng.range(6, 12)
-                    let sph = SCNSphere(radius: CGFloat(rad))
-                    sph.segmentCount = 5
-                    sph.materials = [treeMat]
-                    let lobe = SCNNode(geometry: sph)
-                    lobe.position = SCNVector3(Float(trng.range(-8, 8)),
-                                               Float(hc + rad * 0.4 + trng.range(0, 6)),
-                                               Float(trng.range(-8, 8)))
-                    lobe.scale = SCNVector3(1.0, Float(trng.range(0.9, 1.5)), 1.0)
-                    clump.addChildNode(lobe)
-                }
-                clump.position = worldV3(pc, 0)
-                node.addChildNode(clump)
+        node.name = "landBand"
+        node.castsShadow = false
+        node.renderingOrder = -30
+
+        // A faint scatter of warm town-glow points along the low crest so the
+        // built-up shore feels inhabited at golden hour without competing with
+        // the airfield lights (constant emissive, tiny, low alpha).
+        let glowContainer = SCNNode()
+        var grng = WorldRand(seed: 0x1A4E)
+        let glowMat = SCNMaterial()
+        glowMat.lightingModel = .constant
+        glowMat.diffuse.contents = UIColor.black
+        glowMat.emission.contents = worldColor(1.0, 0.80, 0.52)
+        glowMat.emission.intensity = 0.6
+        glowMat.blendMode = .add
+        glowMat.writesToDepthBuffer = false
+        glowMat.isDoubleSided = true
+        for k in stride(from: 2, to: steps - 2, by: 2) where grng.unit() > 0.55 {
+            let t = Double(k) / Double(steps)
+            let deg = a0 + (a1 - a0) * t
+            let dir = bearing(deg)
+            let count = 2 + grng.int(3)
+            for _ in 0..<count {
+                let d = grng.range(inner + 200, (inner + outer) * 0.5)
+                let dot = SCNNode(geometry: SCNPlane(width: 40, height: 40))
+                dot.geometry?.materials = [glowMat]
+                dot.position = worldV3(dir * d, waterY + grng.range(4, 40))
+                dot.eulerAngles.y = worldYawFacing(-dir)      // face the field
+                glowContainer.addChildNode(dot)
             }
         }
+        let flatGlow = glowContainer.flattenedClone()
+        flatGlow.castsShadow = false
+        node.addChildNode(flatGlow)
         return node
     }
 
-    // MARK: - Boats (the single strongest "real island" cue — a few small
-    // vessels past the rim, moored in the SE cove and underway on the NW
-    // over-the-water pattern side, each trailing a sunlit V-wake)
+    // MARK: - Manhattan skyline (the distant hazy cluster of towers ~13 mi to the
+    // NW on the horizon). A silhouette of procedural tower rectangles of varied
+    // heights, tightly clustered, pre-lerped toward the dusk haze so it reads as
+    // a faint city on the horizon — the urban-adjacent JFK signature. Faceted
+    // extruded boxes hold color, not detail; scene fog + haze do the rest.
+
+    private static func manhattanNode(airport: AirportLayout) -> SCNNode {
+        // NW of the field, ~13 mi ≈ 21 km out (research: 12–16 mi). Placed just
+        // inside the day fogEnd (18 km) so it's a faint band, not a hard model —
+        // actually push to 15.5 km so it survives the dusk fog (14 km) as a ghost.
+        let cityBearing = 315.0                            // NW
+        let cityDist = 15_500.0
+        let waterY = -airport.mesaDropMeters
+        let center = bearing(cityBearing) * cityDist
+        // The skyline runs roughly perpendicular to the view axis (a band across
+        // the NW horizon). Cluster width ~5.5 km so it reads as Midtown+Downtown.
+        let bandAxis = bearing(cityBearing + 90)           // sweep the cluster left↔right
+        let container = SCNNode()
+
+        var rng = WorldRand(seed: 0x3A17)
+        // Two soft humps (Midtown + Lower Manhattan) so the cluster has the
+        // real twin-massing rather than a uniform comb.
+        let bandHalf = 2800.0
+        // Pre-warmed silhouette colors: nearer/taller towers a hair darker, the
+        // farthest bleached almost fully into the haze.
+        func towerColor(_ far: Double) -> UIColor {
+            // far: 0 (front, more saturated) → 1 (back, nearly haze).
+            let hazeR = 0.70, hazeG = 0.60, hazeB = 0.585
+            let bodyR = 0.475, bodyG = 0.445, bodyB = 0.480
+            let f = min(1.0, max(0.0, far))
+            return worldColor(bodyR + (hazeR - bodyR) * f,
+                              bodyG + (hazeG - bodyG) * f,
+                              bodyB + (hazeB - bodyB) * f)
+        }
+
+        // Build a batch of extruded rectangular towers. Each is a simple faceted
+        // box; we flatten the whole cluster into one node for performance.
+        let count = 90
+        for i in 0..<count {
+            let u = Double(i) / Double(count - 1)          // 0…1 across the band
+            // Twin-hump density: more towers (and taller) at u≈0.32 (Midtown) and
+            // u≈0.72 (Downtown), sparser between.
+            let midtown = exp(-pow((u - 0.32) / 0.16, 2))
+            let downtown = exp(-pow((u - 0.72) / 0.12, 2))
+            let mass = max(midtown, downtown * 0.92)
+            // Skip some slots in the gap so the two clusters read distinctly.
+            if mass < 0.14 && rng.unit() > 0.35 { continue }
+            let along = (u - 0.5) * 2 * bandHalf + rng.range(-90, 90)
+            // Depth jitter so the cluster has front/back rows (parallax + haze).
+            let depth = rng.range(-1400, 1400)
+            let pos = center + bandAxis * along + bearing(cityBearing) * depth
+            // Tower footprint + height. Iconic supertalls punch up at the hump
+            // peaks; the mass falls off to low blocky mid-rises at the edges.
+            let base = 30.0 + 140.0 * mass
+            let spike = rng.unit() > (1.0 - 0.10 - 0.22 * mass) ? rng.range(140, 320) : 0
+            let h = (base + spike) * rng.range(0.7, 1.15)
+            let w = rng.range(60, 150)
+            let d = rng.range(60, 150)
+            // Farther-back (more +depth toward the city, or edge towers) → hazier.
+            let far = min(1.0, 0.35 + 0.45 * (depth / 1400.0 + 1.0) * 0.5 + 0.25 * (1.0 - mass))
+            let mat = WorldMat.pbr(towerColor(far), roughness: 1.0, doubleSided: true)
+            let box = SCNBox(width: CGFloat(w), height: CGFloat(h), length: CGFloat(d),
+                             chamferRadius: 0)
+            box.materials = [mat]
+            let node = SCNNode(geometry: box)
+            node.position = worldV3(pos, waterY + h / 2)
+            node.eulerAngles.y = Float(rng.range(-0.25, 0.25))
+            node.castsShadow = false
+            container.addChildNode(node)
+        }
+
+        let flat = container.flattenedClone()
+        flat.name = "manhattan"
+        flat.castsShadow = false
+        flat.renderingOrder = -35
+
+        // A faint warm window-glow wash on the sunlit (SW-facing) sides so the
+        // city catches the low sun — a single low-alpha additive plane draped in
+        // front of the cluster, tinted amber, so the silhouette glows without
+        // per-window cost.
+        let glowMat = SCNMaterial()
+        glowMat.lightingModel = .constant
+        glowMat.diffuse.contents = UIColor.black
+        glowMat.emission.contents = manhattanGlowTex()
+        glowMat.emission.intensity = 0.5
+        glowMat.blendMode = .add
+        glowMat.writesToDepthBuffer = false
+        glowMat.isDoubleSided = true
+        let glowPlane = SCNPlane(width: CGFloat(bandHalf * 2.2), height: 380)
+        glowPlane.materials = [glowMat]
+        let glow = SCNNode(geometry: glowPlane)
+        glow.position = worldV3(center - bearing(cityBearing) * 400, waterY + 150)
+        glow.eulerAngles.y = worldYawFacing(-bearing(cityBearing))
+        glow.castsShadow = false
+        glow.renderingOrder = -34
+        flat.addChildNode(glow)
+        return flat
+    }
+
+    /// A soft horizontal amber band with sparse brighter speckles — draped over
+    /// the Manhattan cluster it reads as a hazy warm city glow catching the low
+    /// sun, without any per-window geometry.
+    private static func manhattanGlowTex() -> UIImage {
+        WorldTex.image(CGSize(width: 512, height: 128), opaque: false) { ctx, size in
+            // Warm base wash concentrated toward the lower half (the built mass).
+            let colors = [worldColor(1.0, 0.72, 0.42, 0.0).cgColor,
+                          worldColor(1.0, 0.70, 0.40, 0.30).cgColor,
+                          worldColor(1.0, 0.66, 0.38, 0.0).cgColor] as CFArray
+            if let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                     colors: colors, locations: [0, 0.62, 1]) {
+                ctx.drawLinearGradient(grad, start: CGPoint(x: 0, y: 0),
+                                       end: CGPoint(x: 0, y: size.height), options: [])
+            }
+            // Sparse brighter glints (sun off glass / lit windows).
+            WorldTex.speckle(ctx, size: size, count: 160, seed: 0x3A18, radius: 1...4,
+                             colors: [(worldColor(1.0, 0.86, 0.60), 0.5),
+                                      (worldColor(1.0, 0.78, 0.50), 0.4)])
+        }
+    }
+
+    // MARK: - Boats (a few small craft on the bay — the "real waterway" cue.
+    // Moored in the SW shallows and underway on the SE approach side, each
+    // trailing a sunlit V-wake.)
 
     private static func boatsNode(airport: AirportLayout) -> SCNNode {
         let container = SCNNode()
@@ -595,12 +555,10 @@ enum WorldTerrainBuilder {
         let sea = -airport.mesaDropMeters
         var rng = WorldRand(seed: 0xB0A7)
 
-        // Warm painted-hull materials (whites/creams catching the low sun).
         let hullWhite = WorldMat.pbr(worldColor(0.90, 0.88, 0.83), roughness: 0.4, metalness: 0.1)
         let hullDark = WorldMat.pbr(worldColor(0.16, 0.20, 0.26), roughness: 0.6)
         let cabinMat = WorldMat.pbr(worldColor(0.82, 0.79, 0.72), roughness: 0.5)
 
-        // Wake material: reuse the foam band as a soft alpha ribbon.
         func wakeMaterial() -> SCNMaterial {
             let m = SCNMaterial()
             m.lightingModel = .constant
@@ -610,23 +568,20 @@ enum WorldTerrainBuilder {
             m.blendMode = .alpha
             m.writesToDepthBuffer = false
             m.isDoubleSided = true
-            // Warm the foam toward the sun so the wake reads as sunlit spray.
             m.emission.contents = worldColor(1.0, 0.86, 0.62)
             m.emission.intensity = 0.25
             return m
         }
 
-        /// One boat: a chevron hull (2 triangles) + a low cabin box, optionally
-        /// trailing a spreading V-wake. `headingDeg` = direction the bow points.
+        /// One boat: chevron hull + low cabin, optionally trailing a V-wake.
         func boat(pos: V2, headingDeg: Double, length: Double, moving: Bool) -> SCNNode {
             let b = SCNNode()
             b.position = worldV3(pos, sea + 0.15)
             b.eulerAngles.y = Float(-degToRad(headingDeg))     // local -Z = bow
-            let hw = length * 0.28                               // half-beam
+            let hw = length * 0.28
             let bow = length * 0.60
             let stern = length * 0.40
 
-            // Hull: flat deck (chevron) sitting just above the water.
             var hull = WorldMesh()
             let up = SIMD3<Float>(0, 1, 0)
             let pBow = SIMD3<Float>(0, 0.12, Float(-bow))
@@ -636,17 +591,14 @@ enum WorldTerrainBuilder {
             let iSL  = hull.add(pSL, up, SIMD2<Float>(0, 1))
             let iSR  = hull.add(pSR, up, SIMD2<Float>(1, 1))
             hull.triangle(iBow, iSL, iSR)
-            let hullNode = SCNNode(geometry: hull.build(material: hullWhite))
-            b.addChildNode(hullNode)
+            b.addChildNode(SCNNode(geometry: hull.build(material: hullWhite)))
 
-            // Dark waterline strip (a thin box hugging the deck edge).
             let waterline = SCNNode(geometry: SCNBox(width: CGFloat(hw * 2), height: 0.22,
                                                      length: CGFloat(bow + stern), chamferRadius: 0.08))
             waterline.geometry?.materials = [hullDark]
             waterline.position = SCNVector3(0, 0.0, Float((stern - bow) / 2))
             b.addChildNode(waterline)
 
-            // Small cabin toward the stern.
             let cabin = SCNNode(geometry: SCNBox(width: CGFloat(hw * 1.1), height: CGFloat(length * 0.16),
                                                  length: CGFloat(length * 0.30), chamferRadius: 0.1))
             cabin.geometry?.materials = [cabinMat]
@@ -654,7 +606,6 @@ enum WorldTerrainBuilder {
             b.addChildNode(cabin)
 
             if moving {
-                // Spreading V-wake ribbon behind the stern.
                 var wake = WorldMesh()
                 let wUp = SIMD3<Float>(0, 1, 0)
                 let wakeLen = length * 9.0
@@ -676,7 +627,6 @@ enum WorldTerrainBuilder {
                 wakeNode.castsShadow = false
                 b.addChildNode(wakeNode)
 
-                // Slow forward creep so the sea has life (bow is -Z).
                 let dist = rng.range(240, 420)
                 let dur = rng.range(90, 150)
                 let move = SCNAction.repeatForever(.sequence([
@@ -689,15 +639,13 @@ enum WorldTerrainBuilder {
             return b
         }
 
-        // Moored craft in the SE cove (mesa angle ~2.2). Bearing from the field
-        // to that cove is ESE; anchor them ~700-900 m out, riding gently.
-        let seCove = headingDirection(degToRad(118))
+        // Moored craft in the SW shallows (the bay side, ~1.2–1.6 km out).
+        let swDir = bearing(222)
         for i in 0..<3 {
-            let d = 720.0 + Double(i) * 55
-            let jitter = V2(rng.range(-40, 40), rng.range(-40, 40))
-            let pos = seCove * d + jitter
-            let m = boat(pos: pos, headingDeg: rng.range(60, 300), length: rng.range(7, 10), moving: false)
-            // A gentle moored bob.
+            let d = 1250.0 + Double(i) * 120
+            let jitter = V2(rng.range(-90, 90), rng.range(-90, 90))
+            let m = boat(pos: swDir * d + jitter, headingDeg: rng.range(60, 300),
+                         length: rng.range(8, 12), moving: false)
             let bob = SCNAction.repeatForever(.sequence([
                 .moveBy(x: 0, y: 0.18, z: 0, duration: 2.4),
                 .moveBy(x: 0, y: -0.18, z: 0, duration: 2.7),
@@ -707,192 +655,32 @@ enum WorldTerrainBuilder {
             container.addChildNode(m)
         }
 
-        // Underway boats on the NW pattern side (where the player looks on
-        // approach) and one crossing the SW channel.
-        let nwDir = headingDirection(degToRad(300))
-        container.addChildNode(boat(pos: nwDir * 1500 + V2(120, -80), headingDeg: 205,
+        // Underway boats: one crossing the SE approach lane (where the player
+        // watches arrivals sweep in over the bay), one on the S bay, one WSW.
+        let seDir = bearing(140)
+        container.addChildNode(boat(pos: seDir * 2600 + V2(180, -120), headingDeg: 250,
+                                    length: rng.range(11, 15), moving: true))
+        let sDir = bearing(190)
+        container.addChildNode(boat(pos: sDir * 3200 + V2(-260, 140), headingDeg: 60,
+                                    length: rng.range(9, 13), moving: true))
+        let wswDir = bearing(255)
+        container.addChildNode(boat(pos: wswDir * 2400 + V2(80, 60), headingDeg: 150,
                                     length: rng.range(9, 12), moving: true))
-        container.addChildNode(boat(pos: nwDir * 2400 + V2(-260, 140), headingDeg: 40,
-                                    length: rng.range(8, 11), moving: true))
-        let swDir = headingDirection(degToRad(235))
-        container.addChildNode(boat(pos: swDir * 1900 + V2(80, 60), headingDeg: 120,
-                                    length: rng.range(7, 10), moving: true))
         return container
     }
 
-    // MARK: - Foothills (fills the empty ESE mid-distance between the mesa rim
-    // ~500 m out and the first interior ridge at 1900 m, so the eye never jumps
-    // from bare grass to a color-block hill — low rolling chaparral swells)
+    // MARK: - Salt haze (low aerial-haze bands hanging over the far bay so the
+    // water dissolves into the sky at the horizon — the warm salt-haze the JFK
+    // reference calls for. Reuses the marine-layer cloud slab as thin, warm,
+    // low-lying bands out over the water sectors.)
 
-    private static func foothillsNode(airport: AirportLayout) -> SCNNode {
-        let baseY = -airport.mesaDropMeters
-        struct Swell { let bearing: Double; let dist: Double; let spineBearing: Double
-                       let length: Double; let halfWidth: Double; let peak: Double; let seed: UInt64 }
-        // A loose arc of gentle swells ringing the SE/ESE mid-distance, lower
-        // and closer than ridgesNode's specs, colored like sunlit chaparral.
-        let swells: [Swell] = [
-            Swell(bearing: 128, dist: 1050, spineBearing: 108, length: 1500, halfWidth: 420, peak: 26, seed: 0x101),
-            Swell(bearing: 150, dist: 1200, spineBearing: 96,  length: 1400, halfWidth: 380, peak: 22, seed: 0x102),
-            Swell(bearing: 108, dist: 1150, spineBearing: 120, length: 1350, halfWidth: 360, peak: 24, seed: 0x103),
-            Swell(bearing: 168, dist: 1300, spineBearing: 82,  length: 1250, halfWidth: 340, peak: 18, seed: 0x104),
-        ]
+    private static func saltHazeNode(airport: AirportLayout) -> SCNNode {
         let container = SCNNode()
-        for sw in swells {
-            var rng = WorldRand(seed: sw.seed)
-            let mid = headingDirection(degToRad(sw.bearing)) * sw.dist
-            let axis = headingDirection(degToRad(sw.spineBearing))
-            let across = V2(-axis.y, axis.x)
-            var mesh = WorldMesh()
-            let segments = 22
-            var spine: [(pos: V2, h: Double, w: Double)] = []
-            for k in 0...segments {
-                let t = Double(k) / Double(segments)
-                let along = (t - 0.5) * sw.length
-                let envelope = sin(.pi * t)
-                let bump = 0.75 + 0.25 * sin(t * 13 + rng.range(0, 5))
-                // Absolute crest Y (peak above the y=0 field datum, matching the
-                // ridge convention so the swell rises from the sea, not below it).
-                let h = max(4, sw.peak * pow(envelope, 0.8) * bump)
-                let lateral = rng.range(-0.12, 0.12) * sw.halfWidth
-                spine.append((mid + axis * along + across * lateral,
-                              h, sw.halfWidth * (0.4 + 0.6 * envelope)))
-            }
-            let profile: [(w: Double, h: Double)] = [
-                (1.00, 0.0), (0.55, 0.42), (-0.02, 1.0), (-0.58, 0.40), (-1.00, 0.0),
-            ]
-            for k in 0..<segments {
-                let (p0, h0, w0) = spine[k]
-                let (p1, h1, w1) = spine[k + 1]
-                for c in 0..<(profile.count - 1) {
-                    let fa = profile[c], fb = profile[c + 1]
-                    let a0 = worldF3(p0 + across * (w0 * fa.w), fa.h <= 0 ? baseY : baseY + (h0 - baseY) * fa.h)
-                    let b0 = worldF3(p0 + across * (w0 * fb.w), fb.h <= 0 ? baseY : baseY + (h0 - baseY) * fb.h)
-                    let a1 = worldF3(p1 + across * (w1 * fa.w), fa.h <= 0 ? baseY : baseY + (h1 - baseY) * fa.h)
-                    let b1 = worldF3(p1 + across * (w1 * fb.w), fb.h <= 0 ? baseY : baseY + (h1 - baseY) * fb.h)
-                    let hintSide = fa.w + fb.w >= 0 ? across : -across
-                    let hint = worldF3(hintSide, 0.85)
-                    let uv = SIMD2(Float(rng.range(0, 1)), Float(rng.range(0, 1)))
-                    mesh.facet(a0, a1, b1, hint: hint, uv: uv, uvSpread: 0.03)
-                    mesh.facet(a0, b1, b0, hint: hint, uv: uv + SIMD2(0.02, 0.02), uvSpread: 0.03)
-                }
-            }
-            let material = WorldMat.pbr(worldColor(0.430, 0.452, 0.300), roughness: 0.96, doubleSided: true)
-            material.multiply.contents = WorldTerrainBuilder.chaparralTex()
-            material.multiply.wrapS = .repeat
-            material.multiply.wrapT = .repeat
-            container.addChildNode(SCNNode(geometry: mesh.build(material: material)))
-        }
-        let flat = container.flattenedClone()
-        flat.name = "foothills"
-        flat.castsShadow = false
-        return flat
-    }
-
-    /// Mottled sage/olive/tan chaparral stipple (multiply over ridge/foothill
-    /// facets so they read as vegetated Catalina hillside, not flat paper).
-    /// Inline here so WorldMaterials.swift stays owned by the runway agent.
-    private static func chaparralTex() -> UIImage {
-        WorldTex.image(CGSize(width: 256, height: 256)) { ctx, size in
-            ctx.setFillColor(UIColor(white: 0.96, alpha: 1).cgColor)
-            ctx.fill(CGRect(origin: .zero, size: size))
-            // Coloured stipple: darker sage clumps + warm tan gaps, so the
-            // multiply shifts hue as well as value across the hillside.
-            WorldTex.speckle(ctx, size: size, count: 520, seed: 0xC4A1,
-                             radius: 3...16,
-                             colors: [(worldColor(0.62, 0.70, 0.52), 0.30),   // sage highlight
-                                      (worldColor(0.50, 0.52, 0.36), 0.30),   // olive
-                                      (worldColor(0.70, 0.62, 0.44), 0.24),   // sun-tan gap
-                                      (worldColor(0.40, 0.44, 0.32), 0.26)],  // shadow clump
-                             wrap: true)
-            WorldTex.speckle(ctx, size: size, count: 40, seed: 0xC4A2,
-                             radius: 24...80,
-                             colors: [(worldColor(0.66, 0.66, 0.50), 0.20),
-                                      (worldColor(0.52, 0.54, 0.40), 0.20)], wrap: true)
-        }
-    }
-
-    // MARK: - Mainland silhouette (NE horizon)
-
-    private static func mainlandNode() -> SCNNode {
-        // Placed at ~19 km so ~95% of it dissolves into the haze — a
-        // barely-there band standing for the coast 30 km out. D14: heights
-        // held to 170–240 m and the color pre-lerped toward the haze so it
-        // can never read as a floating khaki cutout.
-        var rng = WorldRand(seed: 0x33A1)
-        let dirNE = headingDirection(degToRad(40))
-        let center = dirNE * 19_000
-        let axis = headingDirection(degToRad(130))   // band runs NW–SE across the view
-        var mesh = WorldMesh()
-        let segments = 40                            // was 16 — carries headlands
-        let length = 16_000.0
-        let baseY = -488.3
-        var prevTop: SIMD3<Float>?
-        var prevBase: SIMD3<Float>?
-        // Remember a few crest positions so faint town glows can sit in the
-        // low saddles at dusk.
-        var saddles: [(pos: V2, h: Double)] = []
-        for k in 0...segments {
-            let t = Double(k) / Double(segments)
-            let along = (t - 0.5) * length
-            let envelope = sin(.pi * t)
-            // Coastal silhouette: a low-freq headland/notch ridgeline instead of
-            // a smooth arch, so it reads as land, not a cutout.
-            let ridge = 0.62 + 0.24 * sin(t * 7.0 + 0.6) + 0.14 * sin(t * 17.0 + 2.1)
-            let h = (150 + 120 * ridge * rng.unit()) * pow(envelope, 0.55)
-            let p = center + axis * along
-            let top = worldF3(p, baseY + max(30, h))
-            let base = worldF3(p, baseY)
-            if let pt = prevTop, let pb = prevBase {
-                let hint = worldF3(-dirNE, 0.15)
-                mesh.facet(pb, base, top, hint: hint)
-                mesh.facet(pb, top, pt, hint: hint)
-            }
-            prevTop = top; prevBase = base
-            if ridge < 0.6 && envelope > 0.3 { saddles.append((p, baseY + max(30, h) * 0.4)) }
-        }
-        // Pre-warmed toward the dusk haze so it never reads as a khaki cutout.
-        let material = WorldMat.pbr(worldColor(0.615, 0.535, 0.510), roughness: 1.0, doubleSided: true)
-        let node = SCNNode(geometry: mesh.build(material: material))
-        node.name = "mainland"
-        node.castsShadow = false
-
-        // A very faint scatter of warm town-glow points in the coastal saddles —
-        // constant emissive, tiny and low-alpha, so the far shore feels
-        // inhabited at dusk without ever competing with the airfield lights.
-        let glowContainer = SCNNode()
-        var grng = WorldRand(seed: 0x33B7)
-        let glowMat = SCNMaterial()
-        glowMat.lightingModel = .constant
-        glowMat.diffuse.contents = UIColor.black
-        glowMat.emission.contents = worldColor(1.0, 0.78, 0.50)
-        glowMat.emission.intensity = 0.7
-        glowMat.blendMode = .add
-        glowMat.writesToDepthBuffer = false
-        glowMat.isDoubleSided = true
-        for s in saddles where grng.unit() > 0.4 {
-            let count = 2 + grng.int(3)
-            for _ in 0..<count {
-                let dot = SCNNode(geometry: SCNPlane(width: 34, height: 34))
-                dot.geometry?.materials = [glowMat]
-                let off = axis * grng.range(-400, 400)
-                dot.position = worldV3(s.pos + off, s.h + grng.range(-30, 40))
-                dot.eulerAngles.y = Float(-degToRad(40) + .pi)
-                glowContainer.addChildNode(dot)
-            }
-        }
-        let flatGlow = glowContainer.flattenedClone()
-        node.addChildNode(flatGlow)
-        return node
-    }
-
-    // MARK: - Marine layer (offshore WNW — real geography, verified post-flip:
-    // bearings 287/296 are compass-absolute, unaffected by the A7 mirror fix)
-
-    private static func marineLayerNode() -> SCNNode {
-        let container = SCNNode()
-        container.name = "marineLayer"
+        container.name = "saltHaze"
         let image = WorldTex.cloudBank()
-        func slab(distance: Double, headingDeg: Double, width: CGFloat, height: CGFloat,
+        let waterY = -airport.mesaDropMeters
+
+        func slab(distance: Double, bearingDeg: Double, width: CGFloat, height: CGFloat,
                   y: Double, alpha: CGFloat) -> SCNNode {
             let material = SCNMaterial()
             material.lightingModel = .constant
@@ -901,29 +689,36 @@ enum WorldTerrainBuilder {
             material.transparency = alpha
             material.blendMode = .alpha
             material.writesToDepthBuffer = false
+            // Warm the haze toward golden hour so it reads as salt/aerial haze,
+            // not a grey marine layer.
+            material.multiply.contents = worldColor(1.0, 0.82, 0.62)
             let plane = SCNPlane(width: width, height: height)
             plane.materials = [material]
             let node = SCNNode(geometry: plane)
-            let d = headingDirection(degToRad(headingDeg))
+            let d = bearing(bearingDeg)
             node.position = worldV3(d * distance, y)
-            // Face back toward the field (plane's +Z looks at the origin).
-            node.eulerAngles.y = Float(-degToRad(headingDeg) + .pi)
+            node.eulerAngles.y = worldYawFacing(-d)        // face the field
             node.castsShadow = false
-            // Imperceptible drift — the bank breathes laterally over minutes so
-            // the horizon is never quite static.
-            let drift = Float(width) * 0.05
+            node.renderingOrder = -32
+            // Imperceptible lateral drift so the horizon is never quite static.
+            let drift = Float(width) * 0.04
             let slow = SCNAction.repeatForever(.sequence([
-                .moveBy(x: CGFloat(drift), y: 0, z: 0, duration: 140),
-                .moveBy(x: CGFloat(-drift), y: 0, z: 0, duration: 140),
+                .moveBy(x: CGFloat(drift), y: 0, z: 0, duration: 150),
+                .moveBy(x: CGFloat(-drift), y: 0, z: 0, duration: 150),
             ]))
             slow.timingMode = .easeInEaseOut
             node.runAction(slow)
             return node
         }
-        container.addChildNode(slab(distance: 12_500, headingDeg: 287, width: 9000, height: 420,
-                                    y: -310, alpha: 0.42))
-        container.addChildNode(slab(distance: 14_200, headingDeg: 296, width: 11_000, height: 520,
-                                    y: -280, alpha: 0.30))
+
+        // Warm low haze banks ringing the water sectors (SW → S → SE), sitting
+        // just above the waterline so the far bay fades into the sky.
+        container.addChildNode(slab(distance: 9500, bearingDeg: 205, width: 12_000, height: 340,
+                                    y: waterY + 60, alpha: 0.34))
+        container.addChildNode(slab(distance: 11_000, bearingDeg: 235, width: 13_000, height: 420,
+                                    y: waterY + 90, alpha: 0.26))
+        container.addChildNode(slab(distance: 10_200, bearingDeg: 165, width: 11_000, height: 360,
+                                    y: waterY + 70, alpha: 0.28))
         return container
     }
 }

@@ -63,24 +63,32 @@ public struct ApronSpot {
 }
 
 public struct Runway {
-    public let nameA = "04"
-    public let nameB = "22"
+    /// Painted number at the A end (rollout end of the active direction). KAVX
+    /// "04"; KJFK "13R". Display-only — the geometric API below stays neutral.
+    public let nameA: String
+    /// Painted number at the B end (the arrival/landing threshold). KAVX "22";
+    /// KJFK "31L".
+    public let nameB: String
     /// SW end — runway 4 threshold / runway 22 rollout end.
     public let thresholdA: V2
     /// NE end — runway 22 threshold. Arrivals cross this.
     public let thresholdB: V2
     public let width: Double
     public var length: Double { simd_length(thresholdA - thresholdB) }
-    /// Heading flown when using runway 22 (B → A, toward the SW).
+    /// Heading flown when landing (B → A). Named `heading22` for API stability
+    /// (the KAVX active); at KJFK this is the 31L landing heading (~301° true).
     public var heading22: Double { directionHeading(simd_normalize(thresholdA - thresholdB)) }
+    /// Reciprocal (A → B) heading. KAVX runway 04; KJFK runway 13R.
     public var heading04: Double { directionHeading(simd_normalize(thresholdB - thresholdA)) }
-    /// Unit vector along the 22 landing direction.
+    /// Unit vector along the landing (B → A) direction.
     public var dir22: V2 { simd_normalize(thresholdA - thresholdB) }
-    /// Point at a rollout station measured from the 22 threshold.
+    /// Point at a rollout station measured from the arrival (B) threshold.
     public func point(atStationFrom22 s: Double) -> V2 { thresholdB + dir22 * s }
 
-    public init(thresholdA: V2, thresholdB: V2, width: Double) {
+    public init(thresholdA: V2, thresholdB: V2, width: Double,
+                nameA: String = "04", nameB: String = "22") {
         self.thresholdA = thresholdA; self.thresholdB = thresholdB; self.width = width
+        self.nameA = nameA; self.nameB = nameB
     }
 }
 
@@ -121,7 +129,11 @@ public struct AirportLayout {
     public let baseTurnStation: Double
 
     // --- The place itself ---
-    /// The Pacific sits this far below the runway crest (1,602 ft mesa).
+    /// When true the field is dead flat: groundHeight returns 0 everywhere and
+    /// the KAVX mesa profile/knolls are bypassed (KJFK, ~13 ft, dead flat).
+    public let flat: Bool
+    /// The sea/water sits this far below the field. KAVX: the Pacific 488.3 m
+    /// below the 1,602 ft mesa crest. KJFK: Jamaica Bay ~4 m below the field.
     public let mesaDropMeters: Double
     /// Rough mesa-top footprint (closed polygon) for terrain building.
     public let mesaOutline: [V2]
@@ -161,10 +173,29 @@ public struct AirportLayout {
         (800.0, 195.0, 9.0, 110.0),        // SW-end knoll, tower (SE) side
     ]
 
+    /// Tower callout name for radio phraseology (e.g. "Catalina", "Kennedy").
+    public var towerName: String {
+        switch icao {
+        case "KAVX": return "Catalina"
+        case "KJFK": return "Kennedy"
+        default:     return displayName.split(separator: " ").last.map(String.init) ?? icao
+        }
+    }
+
+    /// Fraction of arrivals authored as straight-in ILS finals (vs pattern/
+    /// downwind entries). Big-jet airliner fields fly almost entirely straight-in
+    /// ILS (KJFK); the GA mesa flies a lively mix (KAVX). Keyed off the fleet the
+    /// field accepts so it needs no extra stored field.
+    public var straightInFraction: Double {
+        acceptedClasses.contains(.light) ? 0.5 : 0.85
+    }
+
     /// Mesa-top ground height. Both the sim's ground vehicles/aircraft and the
     /// world mesh sample this — never disagree. The runway profile extends
     /// laterally across the graded airfield; the knolls rise off to the sides.
     public func groundHeight(at p: V2) -> Double {
+        // Flat fields (KJFK) sit at datum y = 0 everywhere — no mesa profile.
+        if flat { return 0.0 }
         let toPoint = p - runway.thresholdB
         let d = runway.dir22
         let s = simd_dot(toPoint, d)
@@ -305,11 +336,132 @@ public struct AirportLayout {
             finalGlideSlopeDeg: 3.3,
             downwindEntryStation: 1400,
             baseTurnStation: -900,
+            flat: false,
             mesaDropMeters: 488.3,
             mesaOutline: outline,
             humpAmplitude: 14.7,
             towerCabEye: V3(cabGround.x, cabEyeY, cabGround.y),
             windsockPosition: at(400, 84)                  // D23: SE, near the ramp
+        )
+    }()
+
+    // MARK: - KJFK
+
+    // New York — John F. Kennedy Intl. A dead-flat coastal field (~13 ft) built
+    // out onto Jamaica Bay. The active in the slice is the Bay Runway 13R/31L —
+    // North America's longest commercial runway (14,511 ft) — landing 31L toward
+    // the NW (301° true), arrivals sweeping in over the bay from the SE. Airliners
+    // only: regional/narrowbody/widebody. Functional (not survey-accurate) taxi
+    // layout on the terminal side; the World layer re-skins terrain/Terminal City.
+    public static let kjfk: AirportLayout = {
+        // Bay Runway 13R/31L. Active = 31L: land toward the NW, true heading 301°.
+        let hLand = degToRad(301)
+        let dir = headingDirection(hLand)                  // points NW (landing dir)
+        let half = 4423.0 / 2                              // 14,511 ft ≈ 4423 m
+        let thresholdB = V2(0, 0) - dir * half             // SE end — 31L threshold (arrival)
+        let thresholdA = V2(0, 0) + dir * half             // NW end — 13R (rollout end)
+        let runway = Runway(thresholdA: thresholdA, thresholdB: thresholdB, width: 60,
+                            nameA: "13R", nameB: "31L")
+
+        // Runway-frame helper: s along the roll from threshold B (31L), p toward
+        // the terminal (NE) side. perpSE is "right of the 31L landing roll".
+        let perpSE = V2(dir.y, -dir.x)                     // right of the roll = terminal (NE) side
+        func at(_ s: Double, _ p: Double) -> V2 { thresholdB + dir * s + perpSE * p }
+
+        // Full-length parallel taxiway 120 m onto the terminal side, big-jet scale.
+        let parOffset = 120.0
+        let parallel = Taxiway(id: "P", name: "Papa",
+                               points: [at(120, parOffset), at(4300, parOffset)], width: 30)
+
+        // The gate ramp sits near threshold B so departures reach the runway in
+        // a short taxi (keeps a full-length runway but a workable ground flow, as
+        // the real Terminal-4 ramp feeds 31L via nearby taxiways). Runway exits
+        // are out at stations 1800/3200 per spec; arrivals roll out, turn off,
+        // and taxi back down the parallel to the near-threshold ramp.
+        let rampStation = 500.0
+        let exit1Station = 1800.0
+        let exit2Station = 3200.0
+        let c1 = Taxiway(id: "C1", name: "Charlie One",
+                         points: [at(120, 0), at(120, parOffset)], width: 25)   // near thr B, line-up
+        let c2 = Taxiway(id: "C2", name: "Charlie Two",
+                         points: [at(exit1Station, 0), at(exit1Station, parOffset)], width: 25)
+        let c3 = Taxiway(id: "C3", name: "Charlie Three",
+                         points: [at(exit2Station, 0), at(exit2Station, parOffset)], width: 25)
+
+        let exits = [
+            RunwayExit(stationFrom22: exit1Station, taxiwayID: "C2", isPreferred: true),
+            RunwayExit(stationFrom22: exit2Station, taxiwayID: "C3", isPreferred: false),
+        ]
+
+        // Apron/gate spots on the terminal side, a compact row near the ramp
+        // (p ≈ 300 m off centerline), all facing the field.
+        var spots: [ApronSpot] = []
+        let apronP = 300.0
+        for s in stride(from: 300.0, through: 1000.0, by: 100.0) {   // 8 gates near thr B
+            spots.append(ApronSpot(position: at(s, apronP), heading: hLand + .pi / 2))
+        }
+
+        // Ground routes. Hold-short near thr B; line-up joins the runway there.
+        let apronExitPoint = at(rampStation, apronP)       // ramp mouth feeding the parallel
+        let holdShort = at(120, 60)                        // short of the runway edge on C1
+        let routeTaxiOut: [V2] = [apronExitPoint,
+                                  at(rampStation, parOffset),  // join the parallel
+                                  at(120, parOffset),           // short taxi to thr B
+                                  holdShort]
+        let routeExitMidfield: [V2] = [at(exit1Station, 0), at(exit1Station, parOffset),
+                                       at(rampStation, parOffset), apronExitPoint]
+        let routeExitEnd: [V2] = [at(exit2Station, 0), at(exit2Station, parOffset),
+                                  at(exit1Station, parOffset),
+                                  at(rampStation, parOffset), apronExitPoint]
+        let routeLineUp: [V2] = [holdShort, thresholdB + dir * 40]
+
+        // A big flat land footprint centered on the field: a rounded rectangle
+        // ~5000 m along × ~3500 m across via a superellipse (n≈4 → rounded-rect
+        // corners). The World layer re-skins this terrain later.
+        var outline: [V2] = []
+        let nOut = 72
+        let halfAlong = 2500.0, halfAcross = 1750.0
+        for i in 0..<nOut {
+            let a = Double(i) / Double(nOut) * 2 * .pi
+            let ca = cos(a), sa = sin(a)
+            // Superellipse |x|^4 + |y|^4 = 1 → boxy rounded rectangle.
+            let along = halfAlong * copysign(pow(abs(ca), 0.5), ca)
+            let cross = halfAcross * copysign(pow(abs(sa), 0.5), sa)
+            outline.append(dir * along + perpSE * (cross + parOffset))
+        }
+
+        // Tower cab: real Terminal-4 tower is 98 m. Commanding eye offset to the
+        // NE/terminal side near midfield, looking out over the runway and the SE
+        // bay approach. flat field ⇒ ground datum y = 0.
+        let cabGround = at(2200, 900)
+        let cabEyeY = 90.0
+
+        return AirportLayout(
+            icao: "KJFK",
+            displayName: "New York — John F. Kennedy Intl",
+            runway: runway,
+            taxiways: [parallel, c1, c2, c3],
+            exits: exits,
+            apronSpots: spots,
+            // Airliners only — no light/cabinTwin/turboprop/heritage/bizjet.
+            acceptedClasses: [.regional, .narrowbody, .widebody],
+            routeTaxiOut: routeTaxiOut,
+            routeExitMidfield: routeExitMidfield,
+            routeExitEnd: routeExitEnd,
+            routeLineUp: routeLineUp,
+            holdShortPoint: holdShort,
+            patternAltitude: 460,
+            downwindOffset: 3000,
+            finalSpawnDistance: 13000,
+            finalGlideSlopeDeg: 3.0,
+            downwindEntryStation: 3600,
+            baseTurnStation: -2400,
+            flat: true,
+            mesaDropMeters: 4.0,                            // Jamaica Bay just below the field
+            mesaOutline: outline,
+            humpAmplitude: 0,
+            towerCabEye: V3(cabGround.x, cabEyeY, cabGround.y),
+            windsockPosition: at(1500, apronP - 40)         // terminal side, near the apron
         )
     }()
 
@@ -320,6 +472,7 @@ public struct AirportLayout {
                 routeLineUp: [V2], holdShortPoint: V2,
                 patternAltitude: Double, downwindOffset: Double, finalSpawnDistance: Double,
                 finalGlideSlopeDeg: Double, downwindEntryStation: Double, baseTurnStation: Double,
+                flat: Bool = false,
                 mesaDropMeters: Double, mesaOutline: [V2], humpAmplitude: Double,
                 towerCabEye: V3, windsockPosition: V2) {
         self.icao = icao; self.displayName = displayName; self.runway = runway
@@ -331,6 +484,7 @@ public struct AirportLayout {
         self.patternAltitude = patternAltitude; self.downwindOffset = downwindOffset
         self.finalSpawnDistance = finalSpawnDistance; self.finalGlideSlopeDeg = finalGlideSlopeDeg
         self.downwindEntryStation = downwindEntryStation; self.baseTurnStation = baseTurnStation
+        self.flat = flat
         self.mesaDropMeters = mesaDropMeters; self.mesaOutline = mesaOutline
         self.humpAmplitude = humpAmplitude
         self.towerCabEye = towerCabEye; self.windsockPosition = windsockPosition

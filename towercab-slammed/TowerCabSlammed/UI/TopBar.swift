@@ -44,7 +44,7 @@ struct TopBarView: View {
 
     private var stationBlock: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("KAVX · CATALINA")
+            Text("KJFK · NEW YORK")
                 .font(Theme.display(15, .semibold))
                 .tracking(2.2)
                 .foregroundStyle(Theme.warmWhite.opacity(0.88))

@@ -12,7 +12,10 @@ import simd
 final class CameraRig: NSObject {
 
     let cameraNode = SCNNode()
-    private weak var view: SCNView?
+    // Gestures live on the ROOT view (ancestor of the SCNView *and* the SwiftUI
+    // HUD) so a drag anywhere is received even though the HUD is layered on top;
+    // otherwise the HUD swallows the touch and the camera never moves.
+    private weak var view: UIView?
     private let eye: V3
 
     // Look state (radians). Yaw 0 = -Z (north), positive clockwise.
@@ -70,12 +73,14 @@ final class CameraRig: NSObject {
 
     var camera: SCNCamera? { cameraNode.camera }
 
-    func attachGestures(to view: SCNView) {
+    func attachGestures(to view: UIView) {
         self.view = view
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
         pan.maximumNumberOfTouches = 1
+        pan.delegate = self
         view.addGestureRecognizer(pan)
         let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
+        pinch.delegate = self
         view.addGestureRecognizer(pinch)
         // C26: two-finger double-tap = camera home (the panic gesture).
         let home = UITapGestureRecognizer(target: self, action: #selector(handleHomeTap(_:)))
@@ -203,5 +208,16 @@ final class CameraRig: NSObject {
 
     @objc private func handleHomeTap(_ g: UITapGestureRecognizer) {
         goHome()
+    }
+}
+
+extension CameraRig: UIGestureRecognizerDelegate {
+    // The look/zoom gestures live on the root view alongside the SwiftUI HUD's
+    // own gestures (button taps, strip swipes). Recognizing simultaneously means
+    // neither blocks the other: you can look around anywhere, and HUD controls
+    // still work.
+    func gestureRecognizer(_ g: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        true
     }
 }

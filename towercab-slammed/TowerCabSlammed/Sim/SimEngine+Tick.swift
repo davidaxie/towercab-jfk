@@ -21,7 +21,7 @@ extension SimEngine {
     // MARK: Tuning
 
     private enum Tune {
-        static let maxActiveStrips = 9
+        static let maxActiveStrips = 12
         static let minSpawnSeparation = 8.0
         static let patternTurnRate = 0.14        // rad/s ≈ a 45 s orbit
         static let cometTurnRate = 0.105
@@ -46,7 +46,9 @@ extension SimEngine {
         static let forceEndGrace = 150.0
         static let groundQueueGap = 28.0          // B4 — taxi queue spacing, m
         static let taxiLaneOffset = 3.5           // B4 — keep-right taxi lane, m
-        static let downwindStagger = 350.0        // rejoin spacing on the leg, m
+        static let downwindStagger = 600.0        // rejoin spacing on the leg, m (big-jet scale)
+        static let goAroundTransitClimb = 120.0   // rejoin transits this far ABOVE pattern alt
+        static let goAroundTierSpacing = 150.0    // vertical stack between simultaneous go-arounds
     }
 
     // MARK: Geometry sugar
@@ -80,6 +82,74 @@ extension SimEngine {
     private var patternAbsAlt: Double { airport.patternAltitude }
     private func downwindPoint(station s: Double) -> V2 {
         rw.point(atStationFrom22: s) + perpPattern * airport.downwindOffset
+    }
+    /// In-trail speed cap for a downwind aircraft: keeps a wingspan-aware buffer
+    /// behind the nearest hazard ahead on the leg. Leaders are pattern traffic at
+    /// a LOWER station (ahead toward the base turn) OR any orbiting/going-around
+    /// aircraft sitting on the leg near us (a commanded 360 parks an aircraft on
+    /// the downwind that faster followers must hold behind, never merge through).
+    /// A hard floor forces the follower toward a stop before overlap. Returns +∞
+    /// when the leg is clear. Pure function of the snapshot ⇒ deterministic.
+    private func downwindSpeedCap(_ ac: Aircraft, station s: Double) -> Double {
+        var cap = Double.infinity
+        let myLat = cross(of: ac.pos2)
+        for other in aircraft where other.id != ac.id {
+            switch other.phase {
+            case .downwind, .base, .orbiting, .goingAround: break
+            default: continue
+            }
+            // Skip anything far off our lateral band (final/base intercept, etc).
+            guard abs(cross(of: other.pos2) - myLat) < 900 else { continue }
+            let margin = (ac.kind.wingspanMeters + other.kind.wingspanMeters)
+            let os = station(of: other.pos2)
+            let gap = s - os                      // >0 ⇒ hazard is ahead of us
+            let isOrbiter = other.phase == .orbiting || other.phase == .goingAround
+
+            // In-trail rule: hold behind traffic ahead on the leg, and give
+            // a bounded-orbit berth to any orbiting/going-around aircraft.
+            let effGap = isOrbiter ? abs(gap) : gap
+            guard isOrbiter || gap > 0 else { continue }
+            let buffer = (isOrbiter ? 560.0 : 300.0) + margin
+            let hardFloor = (isOrbiter ? 480.0 : 120.0) + margin / 2
+            if effGap < buffer {
+                if effGap < hardFloor {
+                    cap = min(cap, 0)             // full stop — never overlap
+                } else {
+                    let closeness = max(0, min(1, (buffer - effGap) / (buffer - hardFloor)))
+                    let leadSpeed = isOrbiter ? 0.0 : other.speed
+                    cap = min(cap, leadSpeed * (1 - closeness))
+                }
+            }
+        }
+        return cap
+    }
+    /// In-trail speed cap for an arrival on final: hold behind the nearest
+    /// arrival ahead (closer to the threshold) on the extended centerline so a
+    /// faster follower never overruns a slower leader down the long ILS final.
+    /// Returns +∞ when the final ahead is clear. Pure function of the snapshot.
+    private func finalInTrailCap(_ ac: Aircraft, distToThr d: Double) -> Double {
+        var cap = Double.infinity
+        for other in aircraft where other.id != ac.id {
+            switch other.phase {
+            case .inboundFinal, .finalApproach, .shortFinal, .flare: break
+            default: continue
+            }
+            let od = -station(of: other.pos2)     // leader's distance to threshold
+            let gap = d - od                       // >0 ⇒ leader is ahead (closer in)
+            guard gap > 0 else { continue }
+            let margin = (ac.kind.wingspanMeters + other.kind.wingspanMeters)
+            let buffer = 900.0 + margin            // required in-trail spacing on final
+            let hardFloor = 250.0 + margin / 2
+            if gap < buffer {
+                if gap < hardFloor {
+                    cap = min(cap, other.speed * 0.6)   // ease well back, keep flying
+                } else {
+                    let closeness = max(0, min(1, (buffer - gap) / (buffer - hardFloor)))
+                    cap = min(cap, other.speed * (1 - 0.4 * closeness))
+                }
+            }
+        }
+        return cap
     }
     private func turnRate(_ ac: Aircraft) -> Double {
         ac.kind.engineIsJet ? Tune.cometTurnRate : Tune.patternTurnRate
@@ -279,9 +349,7 @@ extension SimEngine {
         ac.spawnedAt = simTime
         aircraft.append(ac)
         eventQueue.append(.aircraftSpawned(id))
-        pilotSay(ac, ac.straightIn
-            ? "Catalina Tower, \(ac.callsign.spoken), long final runway two-two."
-            : "Catalina Tower, \(ac.callsign.spoken), right downwind two-two, full stop.")
+        pilotSay(ac, radio.pilotArrivalCheckIn(ac.callsign, straightIn: ac.straightIn))
     }
 
     private func spawnDeparture(_ order: SpawnOrder, spot: Int) {
@@ -521,11 +589,16 @@ extension SimEngine {
             return
         }
 
-        // Speed: pattern speed bleeding to Vref inside 2 km.
+        // Speed: pattern speed bleeding to Vref inside 2 km, but never faster
+        // than the in-trail cap behind the arrival ahead on final. On a long ILS
+        // final a faster jet behind a slower one would otherwise close the gap
+        // and merge; speed control holds the spacing (and avoids the double-red
+        // that would pile two go-arounds together).
         let vRef = ac.kind.approachSpeed
         let blend = max(0, min(1, (d - 300) / (Tune.speedBleedStart - 300)))
-        ac.driveSpeed(toward: vRef + (ac.kind.patternSpeed - vRef) * blend,
-                      accel: 1.2, decel: 1.1, dt: dt)
+        let vProfile = vRef + (ac.kind.patternSpeed - vRef) * blend
+        ac.driveSpeed(toward: min(vProfile, finalInTrailCap(ac, distToThr: d)),
+                      accel: 1.2, decel: 1.3, dt: dt)
 
         // Lateral: pursue a point on the centerline just ahead.
         let aim = rw.point(atStationFrom22: -(d - Tune.approachLookahead))
@@ -567,7 +640,13 @@ extension SimEngine {
                 ac.phase = .base
             }
         }
-        ac.driveSpeed(toward: ac.kind.patternSpeed, accel: 1.2, decel: 1.0, dt: dt)
+        // In-trail speed discipline: never overrun the aircraft ahead on the
+        // downwind leg (lower station = closer to base = the leader). The
+        // trailing aircraft caps to the leader's speed as the gap closes, so
+        // a fast jet entering behind a slow one holds station rather than
+        // merging into it. Deterministic (pure function of the snapshot).
+        let targetSpeed = min(ac.kind.patternSpeed, downwindSpeedCap(ac, station: s))
+        ac.driveSpeed(toward: targetSpeed, accel: 1.2, decel: 1.4, dt: dt)
         ac.steer(toPoint: downwindPoint(station: s - 320), maxRate: turnRate(ac), dt: dt,
                  maxBank: maxBank(ac))
         // B7 — hold pattern altitude on the downwind; the descent lives on base.
@@ -596,11 +675,18 @@ extension SimEngine {
         let rate = turnRate(ac) * (ac.orbitLeft ? -1.0 : 1.0)
         ac.heading += rate * dt
         ac.orbitRemaining -= abs(rate * dt)
+        // Bounded-radius orbit: a commanded 360 is flown as a tight, slowed
+        // holding turn so the swept circle stays compact and never merges into
+        // downwind traffic. r = v/ω, so cap v ≤ ω·R_max. This matters for the
+        // big-jet fleet whose full pattern-speed 360 would otherwise sweep a
+        // ~2 km circle across the leg. Deterministic (pure geometry).
+        let orbitRadiusMax = 420.0
+        let orbitSpeedCap = min(ac.kind.patternSpeed, abs(rate) * orbitRadiusMax)
         // TRUE coordinated bank for the orbit rate, ceiling per type, rate-limited.
         let idealBank = atan((abs(rate) * max(ac.speed, 20)) / 9.81) * (ac.orbitLeft ? -1 : 1)
         let mb = maxBank(ac)
         ac.rollBank(toward: max(-mb, min(mb, idealBank)), dt: dt)
-        ac.driveSpeed(toward: ac.kind.patternSpeed, accel: 1.0, decel: 0.8, dt: dt)
+        ac.driveSpeed(toward: orbitSpeedCap, accel: 1.0, decel: 1.2, dt: dt)
         ac.verticalSpeed += (0 - ac.verticalSpeed) * min(1, dt * 2)
         drivePitch(ac, aoa: angleOfAttack(ac), dt: dt)
         easeCrab(ac, toward: crabAngle(forGroundHeading: ac.heading, airspeed: ac.speed), dt: dt)
@@ -629,17 +715,30 @@ extension SimEngine {
         // Stagger the rejoin behind existing pattern traffic so two go-arounds
         // never stack on the entry point.
         ac.rejoinEntryStation = freeDownwindEntryStation(excluding: ac.id)
+        // Assign a vertical transit tier above any go-around already climbing
+        // out, so simultaneous go-arounds stack in altitude (never overlap in the
+        // air) while they fly their rejoins. Deterministic (count-based).
+        let climbingOutCount = aircraft.filter {
+            $0.id != ac.id && $0.phase == .goingAround
+        }.count
+        ac.gaTransitTier = climbingOutCount
         conflicts.clear(involving: ac.id)
     }
 
     /// A downwind entry station clear of current pattern traffic — pushed back
     /// (higher station) once per aircraft already flying the pattern.
     private func freeDownwindEntryStation(excluding id: AircraftID) -> Double {
+        // Enter behind ALL current pattern traffic: past the highest-station
+        // aircraft already on/rejoining the leg, plus a big-jet stagger. Tracking
+        // the actual max station (not just a count) stops a fresh entry from
+        // materializing on top of traffic that has drifted up-leg (B18/B-merge).
         let inPattern = aircraft.filter {
-            $0.id != id && [.downwind, .goingAround, .orbiting].contains($0.phase)
-        }.count
-        return airport.downwindEntryStation + Tune.downwindStagger * Double(inPattern)
-            + Double(id.raw % 3) * 130
+            $0.id != id && [.downwind, .goingAround, .orbiting, .base].contains($0.phase)
+        }
+        let baseStation = airport.downwindEntryStation
+        let maxOccupied = inPattern.map { station(of: $0.pos2) }.max() ?? -.infinity
+        let behind = max(baseStation, maxOccupied + Tune.downwindStagger)
+        return behind + Double(id.raw % 3) * 130
     }
 
     private func pilotForcedGoAround(_ ac: Aircraft, penalty: Int, selfPreservation: Bool) {
@@ -658,9 +757,40 @@ extension SimEngine {
         beginGoAround(ac)
     }
 
+    /// Speed cap for a go-around so it never overruns another rejoining aircraft
+    /// its climb-out crosses (a lower-tier climber can pass through a higher-tier
+    /// aircraft's altitude, so a horizontal hold-off is needed alongside the
+    /// vertical tiers). Floors above approach speed — a climbing jet keeps flying.
+    private func goAroundInTrailCap(_ ac: Aircraft) -> Double {
+        var cap = Double.infinity
+        for other in aircraft where other.id != ac.id {
+            guard other.phase == .goingAround || other.phase == .orbiting else { continue }
+            let dist = simd_length(other.pos2 - ac.pos2)
+            let mergeR = 460.0 + (ac.kind.wingspanMeters + other.kind.wingspanMeters)
+            guard dist < mergeR else { continue }
+            // The aircraft further along toward the rejoin (higher station) is the
+            // leader; the trailing one yields. Ties break by id for determinism.
+            let sMe = station(of: ac.pos2), sOther = station(of: other.pos2)
+            let iTrail = sMe < sOther || (sMe == sOther && ac.id.raw > other.id.raw)
+            if iTrail {
+                let closeness = max(0, min(1, (mergeR - dist) / mergeR))
+                cap = min(cap, other.speed * (1 - 0.75 * closeness))
+            }
+        }
+        return cap
+    }
+
     private func updateGoAround(_ ac: Aircraft, dt: Double) {
-        ac.driveSpeed(toward: ac.kind.patternSpeed, accel: 1.6, decel: 0.8, dt: dt)
-        let climbing = ac.altitude < patternAbsAlt - 5
+        let gaCap = max(ac.kind.approachSpeed * 0.75, goAroundInTrailCap(ac))
+        ac.driveSpeed(toward: min(ac.kind.patternSpeed, gaCap), accel: 1.6, decel: 1.4, dt: dt)
+        // A go-around climbs ABOVE the pattern and transits its rejoin at that
+        // higher level, only descending to pattern altitude once re-established
+        // on the downwind (in updateDownwind). The vertical tier keeps a rejoin
+        // safely over any downwind traffic its ground track crosses — no mid-air
+        // merge even on a long straight-in go-around's sweep back to the pattern.
+        let transitAlt = patternAbsAlt + Tune.goAroundTransitClimb
+            + Double(ac.gaTransitTier) * Tune.goAroundTierSpacing
+        let climbing = ac.altitude < transitAlt - 5
         let desiredVS = climbing ? ac.kind.climbRate : 0
         ac.verticalSpeed += (desiredVS - ac.verticalSpeed) * min(1, dt * 1.8)
         // Climb attitude via the one pitch law; go-arounds are firewalled power.

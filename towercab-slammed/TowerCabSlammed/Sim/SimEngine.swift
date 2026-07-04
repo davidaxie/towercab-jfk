@@ -62,14 +62,16 @@ public final class SimEngine {
         self.airport = airport
         self.seed = seed
         self.rng = SeededRNG(seed: seed)
-        self.script = ShiftScript.standardShift(seed: seed)
+        self.script = ShiftScript.standardShift(seed: seed, airport: airport)
         // B26 — seed-derived so every shift's wind reads a little different.
         var wrng = SeededRNG(seed: seed ^ 0xA17C0DE_5EED_9E37)
         let dir = (wrng.double(in: 210...260) / 10).rounded() * 10
         let spd = wrng.double(in: 4...12).rounded()
         let wind = Wind(directionDeg: dir, speedKts: spd, gustKts: spd + 5)
         self.wind = wind
-        self.radio = RadioVoice(seed: seed, wind: wind)
+        self.radio = RadioVoice(seed: seed, wind: wind,
+                                towerName: airport.towerName,
+                                runwayName: airport.runway.nameB)
         let empty = SimSnapshot(simTime: 0, tickIndex: 0, aircraft: [], score: 0,
                                 streakMultiplier: 1, shiftPhase: .ramp,
                                 shiftTimeRemaining: script.duration, wind: wind)

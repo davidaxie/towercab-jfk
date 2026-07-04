@@ -88,11 +88,11 @@ struct StartScreenView: View {
 
     private var locationCard: some View {
         VStack(spacing: 6) {
-            Text("KAVX — AIRPORT IN THE SKY")
+            Text("KJFK — JOHN F. KENNEDY INTL")
                 .font(Theme.display(17, .bold))
                 .tracking(2.4)
                 .foregroundStyle(Theme.warmWhite.opacity(0.92))
-            Text("“We gave it a tower. You're welcome.”")
+            Text("“The world lands here.”")
                 .font(Theme.display(15, .medium))
                 .italic()
                 .foregroundStyle(Theme.warmWhite.opacity(0.62))

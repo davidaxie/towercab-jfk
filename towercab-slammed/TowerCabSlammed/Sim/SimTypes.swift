@@ -36,7 +36,7 @@ public struct AircraftID: Hashable, Codable, CustomStringConvertible {
     public var description: String { "AC\(raw)" }
 }
 
-/// The 16 REAL aircraft types in the fleet (real type names, fictional airlines).
+/// The 30 REAL aircraft types in the fleet (real type names, fictional airlines).
 /// Every per-type number is data — see `spec` in AircraftCatalog.swift; the
 /// computed properties below just delegate, so movement/sim code that reads
 /// `kind.approachSpeed`, `kind.wingspanMeters`, etc. compiles unchanged.
@@ -55,12 +55,28 @@ public enum AircraftKind: String, CaseIterable, Codable {
     // Bizjets
     case phenom300      // Embraer Phenom 300 — light jet
     case challenger350  // Bombardier Challenger 350 — super-mid bizjet (the VIP)
-    // Airliners
+    // Airliners — regional
     case e175           // Embraer E175 — regional jet
+    case atr72          // ATR 72-600 — regional turboprop
+    case dash8          // Bombardier Dash 8 Q400 — regional turboprop
+    case e190           // Embraer E190 — regional jet
+    case crj900         // Bombardier CRJ900 — regional jet
+    // Airliners — narrowbody
     case boeing737      // Boeing 737-800 — narrowbody
     case airbus320      // Airbus A320 — narrowbody
+    case a319           // Airbus A319 — narrowbody
+    case a321           // Airbus A321 — narrowbody
+    case b757           // Boeing 757-200 — narrowbody
+    case md80           // McDonnell Douglas MD-80 — narrowbody
+    // Airliners — widebody
     case boeing777      // Boeing 777-300ER — widebody
     case airbus380      // Airbus A380-800 — the whale
+    case b767           // Boeing 767-300ER — widebody
+    case b787           // Boeing 787-9 — widebody
+    case a330           // Airbus A330-300 — widebody
+    case a350           // Airbus A350-900 — widebody
+    case b747           // Boeing 747-400 — widebody
+    case dc10           // McDonnell Douglas DC-10 — widebody
 
     public var displayType: String { spec.display }
     /// Approach speed over the fence, m/s.

@@ -60,9 +60,14 @@ struct ShiftScript {
         return (downwind + baseLeg) / vPat + final / vBleed
     }
 
-    static func standardShift(seed: UInt64, airport: AirportLayout = .kavx) -> ShiftScript {
+    static func standardShift(seed: UInt64, airport: AirportLayout = .kjfk) -> ShiftScript {
         var rng = SeededRNG(seed: seed ^ 0x5C21F7_5C21F7)
         var script = ShiftScript()
+        // A big single-runway airliner field (KJFK: 4.4 km runway, 13 km finals,
+        // long taxi) clears its traffic more slowly than the tiny KAVX mesa, so
+        // the shift runs a little longer to let the departure queue drain. Keyed
+        // off the accepted fleet so it needs no extra stored field.
+        script.duration = airport.acceptedClasses.contains(.light) ? 360 : 420
         var t = rng.double(in: 4...8)
         var usedIsla = Set<Int>()
         var usedTail = Set<String>()
@@ -82,7 +87,8 @@ struct ShiftScript {
             // Rarity-weighted pick over the types this airport accepts (KAVX =
             // GA + turboprops + the DC-3, no jets). Deterministic on the RNG.
             let kind = AircraftKind.weightedKind(spawnableAt: airport, rng: &rng)
-            let straightIn = rng.chance(0.5)
+            // Airliner fields fly mostly straight-in ILS; the GA mesa a livelier mix.
+            let straightIn = rng.chance(airport.straightInFraction)
 
             // B1/B13 — authoring guard. Consecutive arrivals keep ≥26 s spawn
             // spacing (≥45 s when the follower type is faster — a Vela may
@@ -93,10 +99,16 @@ struct ShiftScript {
                 let fasterBehindSlower = lastArrivalKind.map {
                     kind.approachSpeed > $0.approachSpeed + 0.1
                 } ?? false
-                let minGap = fasterBehindSlower ? 45.0 : 26.0
+                // Big-jet airliner fields need wider arrival spacing than the GA
+                // mesa: a long runway occupies longer per landing and the long
+                // final leaves little room to recover a squeeze, so keep landings
+                // comfortably apart to avoid manufactured back-to-back reds.
+                let airliner = !airport.acceptedClasses.contains(.light)
+                let minGap = fasterBehindSlower ? 45.0 : (airliner ? 34.0 : 26.0)
+                let minLandingGap = airliner ? 55.0 : 30.0
                 let landing = t + Self.estArrivalDuration(kind: kind, straightIn: straightIn,
                                                           airport: airport)
-                if t - lastArrivalSpawn < minGap || landing - lastArrivalLanding < 30 {
+                if t - lastArrivalSpawn < minGap || landing - lastArrivalLanding < minLandingGap {
                     isArrival = false
                     arrivalsMinusDepartures -= 2      // undo +1, apply −1
                 } else {
@@ -168,7 +180,16 @@ struct ShiftScript {
         case .challenger350: return "Challenger"
         // Airliners never use the type prefix (they get airline callsigns), but
         // provide a sane fallback for completeness.
-        case .e175:          return "Embraer"
+        case .e175, .e190:   return "Embraer"
+        case .atr72:         return "ATR"
+        case .dash8:         return "Dash Eight"
+        case .crj900:        return "Regional Jet"
+        case .a319, .a321, .a330, .a350:
+                             return "Airbus"
+        case .b757, .b767, .b787, .b747:
+                             return "Boeing"
+        case .md80:          return "Mad Dog"
+        case .dc10:          return "Douglas"
         case .boeing737, .airbus320, .boeing777, .airbus380: return "Heavy"
         }
     }

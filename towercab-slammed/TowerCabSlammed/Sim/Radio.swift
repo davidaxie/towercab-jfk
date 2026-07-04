@@ -9,12 +9,37 @@ import Foundation
 struct RadioVoice {
     private var rng: SeededRNG
     let windText: String
+    /// Tower callout name, e.g. "Catalina" / "Kennedy".
+    let towerName: String
+    /// Spoken active-runway number, e.g. "two-two" / "three-one-left".
+    let runwaySpoken: String
 
-    init(seed: UInt64, wind: Wind) {
+    init(seed: UInt64, wind: Wind, towerName: String = "Catalina", runwayName: String = "22") {
         self.rng = SeededRNG(seed: seed ^ 0x11AD_10_11AD_10)
         let dir = ShiftScript.spokenDigits(String(format: "%03d", Int(wind.directionDeg)))
         let spd = ShiftScript.spokenDigits(String(Int(wind.speedKts)))
         self.windText = "wind \(dir.lowercased()) at \(spd.lowercased())"
+        self.towerName = towerName
+        self.runwaySpoken = RadioVoice.spokenRunway(runwayName)
+    }
+
+    /// Spell a runway designator ("31L") as ATC phraseology ("three-one-left").
+    static func spokenRunway(_ name: String) -> String {
+        var words: [String] = []
+        for ch in name {
+            if let d = ch.wholeNumberValue {
+                words.append(["zero","one","two","three","four",
+                              "five","six","seven","eight","niner"][d])
+            } else {
+                switch ch.uppercased() {
+                case "L": words.append("left")
+                case "R": words.append("right")
+                case "C": words.append("center")
+                default: break
+                }
+            }
+        }
+        return words.joined(separator: "-")
     }
 
     private mutating func pick(_ options: [String]) -> String { rng.pick(options) }
@@ -22,7 +47,7 @@ struct RadioVoice {
     // MARK: Tower → pilot (returns tower call; readbacks built separately)
 
     mutating func towerClearedToLand(_ c: Callsign) -> String {
-        "\(c.spoken), runway two-two, \(windText), cleared to land."
+        "\(c.spoken), runway \(runwaySpoken), \(windText), cleared to land."
     }
     mutating func towerGoAround(_ c: Callsign) -> String {
         pick(["\(c.spoken), go around, fly runway heading, climb to pattern altitude.",
@@ -36,12 +61,12 @@ struct RadioVoice {
         "\(c.spoken), make one three-sixty to the \(left ? "left" : "right"), report back inbound."
     }
     mutating func towerLineUp(_ c: Callsign) -> String {
-        "\(c.spoken), runway two-two, line up and wait."
+        "\(c.spoken), runway \(runwaySpoken), line up and wait."
     }
     mutating func towerTakeoff(_ c: Callsign, immediate: Bool) -> String {
         immediate
-            ? "\(c.spoken), runway two-two, no delay, cleared for immediate takeoff."
-            : "\(c.spoken), runway two-two, \(windText), cleared for takeoff."
+            ? "\(c.spoken), runway \(runwaySpoken), no delay, cleared for immediate takeoff."
+            : "\(c.spoken), runway \(runwaySpoken), \(windText), cleared for takeoff."
     }
     mutating func towerHold(_ c: Callsign) -> String {
         pick(["\(c.spoken), hold position.", "\(c.spoken), hold your position."])
@@ -60,8 +85,8 @@ struct RadioVoice {
     }
     /// B25 — the tower answers a ready-to-taxi call with an actual clearance.
     mutating func towerTaxiClearance(_ c: Callsign, via: String) -> String {
-        pick(["\(c.spoken), runway two-two, taxi via \(via), hold short.",
-              "\(c.spoken), taxi to runway two-two via \(via), hold short."])
+        pick(["\(c.spoken), runway \(runwaySpoken), taxi via \(via), hold short.",
+              "\(c.spoken), taxi to runway \(runwaySpoken) via \(via), hold short."])
     }
     mutating func towerHandoffDeparture(_ c: Callsign) -> String {
         pick(["\(c.spoken), contact SoCal departure. Good day.",
@@ -77,7 +102,7 @@ struct RadioVoice {
     mutating func readback(_ c: Callsign, for command: Command) -> String {
         switch command {
         case .clearedToLand:
-            return "Cleared to land two-two, \(c.spoken)."
+            return "Cleared to land \(runwaySpoken), \(c.spoken)."
         case .goAround:
             return pick(["Going around, \(c.spoken).",
                          "Runway heading, going around, \(c.spoken)."])
@@ -86,10 +111,10 @@ struct RadioVoice {
         case .make360(let left):
             return "One three-sixty to the \(left ? "left" : "right"), \(c.spoken)."
         case .lineUpAndWait:
-            return "Line up and wait two-two, \(c.spoken)."
+            return "Line up and wait \(runwaySpoken), \(c.spoken)."
         case .clearedForTakeoff(let immediate):
             return immediate ? "Rolling now, \(c.spoken)."
-                             : "Cleared for takeoff two-two, \(c.spoken)."
+                             : "Cleared for takeoff \(runwaySpoken), \(c.spoken)."
         case .holdPosition:
             return "Holding, \(c.spoken)."
         case .continueTaxi:
@@ -103,12 +128,18 @@ struct RadioVoice {
 
     // MARK: Pilot-initiated
 
+    /// First call from an inbound arrival, straight-in ILS or pattern entry.
+    mutating func pilotArrivalCheckIn(_ c: Callsign, straightIn: Bool) -> String {
+        straightIn
+            ? "\(towerName) Tower, \(c.spoken), long final runway \(runwaySpoken)."
+            : "\(towerName) Tower, \(c.spoken), right downwind \(runwaySpoken), full stop."
+    }
     mutating func pilotReadyToTaxi(_ c: Callsign) -> String {
-        pick(["Catalina Tower, \(c.spoken), at the ramp, ready to taxi.",
+        pick(["\(towerName) Tower, \(c.spoken), at the ramp, ready to taxi.",
               "Tower, \(c.spoken), ready to taxi with the numbers."])
     }
     mutating func pilotHoldingShort(_ c: Callsign) -> String {
-        "\(c.spoken), holding short runway two-two, ready for departure."
+        "\(c.spoken), holding short runway \(runwaySpoken), ready for departure."
     }
     mutating func pilotNag(_ c: Callsign) -> String {
         pick(["Tower, \(c.spoken), still holding short, ready.",
@@ -151,7 +182,7 @@ struct RadioVoice {
               "\(c.spoken) is going around, runway's still occupied."])
     }
     mutating func pilotClearOfRunway(_ c: Callsign) -> String {
-        pick(["\(c.spoken), clear of two-two.", "\(c.spoken) is clear, taxiing in."])
+        pick(["\(c.spoken), clear of \(runwaySpoken).", "\(c.spoken) is clear, taxiing in."])
     }
     mutating func pilotAirborne(_ c: Callsign) -> String {
         // B30 — departure phraseology (no "rolling out" on a climb-out).

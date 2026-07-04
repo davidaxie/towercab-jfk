@@ -4,13 +4,26 @@ import UIKit
 import simd
 
 // =============================================================================
-// Airfield details — MIRL edge lights (the dusk switch-on beat), REIL strobes
-// at the 22 threshold, the PVASI left of the runway 4 approach (A6), windsock
-// with segmented circle (D23), runway-remaining + hold signs (A10), the one
-// hangar + Spanish Colonial terminal (A9), the fictional tower shaft, scrub
-// clusters (D15), boulders, and the two Catalina bison (A12). Emissive
-// materials register with AirfieldLightBank; the sky director drives their
-// dusk ramp from sim time.
+// Airfield details. Two airports share this file; build() dispatches on the
+// layout:
+//
+//  • KAVX (Catalina) — MIRL edge lights, REIL strobes, PVASI, windsock +
+//    segmented circle, distance/hold signs, the hangar + Spanish Colonial
+//    terminal, the mesa tower shaft, scrub/boulders, and the two bison.
+//
+//  • KJFK (the JFK re-base) — a MAJOR AIRPORT: the curved "Terminal City"
+//    horseshoe of glass-and-metal terminals with jet bridges and a few static
+//    parked widebodies at the gates for scale, the tall Pei-Cobb glass control
+//    tower near midfield, a broad apron with tugs/GSE/light poles, and JFK-style
+//    airfield lighting — an ALSF approach-light bar array reaching out over
+//    Jamaica Bay toward the SE arrival end, high-intensity white edge +
+//    green/red threshold lights down the 4423 m Bay Runway, and blue taxiway
+//    edge lights along the parallel. Everything procedural, FLAT (groundHeight
+//    is 0 across the field), read from the ~90 m tower at golden hour.
+//
+// Emissive materials register with AirfieldLightBank; the sky director drives
+// their dusk ramp from sim time. All UIGraphicsImageRenderer use inherits
+// WorldTex.image's fmt.preferredRange = .standard (wide-gamut crashes Metal).
 // =============================================================================
 
 /// Emissive materials / lights that switch on around dusk. Sky calls
@@ -73,6 +86,10 @@ enum WorldDetailsBuilder {
     static let edgeLightGroupStagger = 0.0013
 
     static func build(into root: SCNNode, airport: AirportLayout, bank: AirfieldLightBank) {
+        if airport.icao == "KJFK" {
+            KJFKDetails.build(into: root, airport: airport, bank: bank)
+            return
+        }
         let frame = FieldFrame(airport)
         root.addChildNode(pvasiNode(airport: airport, frame: frame, bank: bank))
         root.addChildNode(reilNode(airport: airport, frame: frame, bank: bank))
@@ -1227,5 +1244,971 @@ enum WorldDetailsBuilder {
         let flat = container.flattenedClone()
         flat.name = "scrub"
         return flat
+    }
+}
+
+// =============================================================================
+// KJFK — John F. Kennedy Intl. A MAJOR AIRPORT on a dead-flat coastal field.
+//
+// Everything lives in the runway-frame (FieldFrame): s = metres along the 31L
+// landing roll from threshold B (the SE / Jamaica Bay arrival end), p = metres
+// toward the terminal (NE) side. The active is the Bay Runway 13R/31L (4423 m ×
+// 60 m); arrivals sweep in over the bay from the SE (s < 0), roll out to the NW.
+// The tower cab eye is high (~90 m) at s≈2200, p≈900 on the terminal side near
+// midfield, looking SW/S across the runway — so Terminal City, the gates, and
+// the apron all sit in its forward view, with the approach-light bars and the
+// bay beyond the far threshold.
+//
+// Palette: warm golden-hour "Luminous Diorama", but JFK is FLAT, WIDE, WATERY,
+// urban-adjacent. Pale grooved concrete, glass-and-metal terminals, salt haze.
+// The field is flat (groundHeight == 0); static geometry is flattened. Terrain
+// (bay water, Manhattan skyline) belongs to the terrain layer, not here.
+// =============================================================================
+
+enum KJFKDetails {
+
+    // Terminal-side layout (station-frame metres). The tower cab sits high at
+    // p≈900; its glass sill cuts off any look-down steeper than ~16°, so the
+    // near apron directly under the tower is hidden. Terminal City is therefore
+    // pulled OUT into the sweet band (p ≈ 260–460, ~450–900 m out, 6–10° down)
+    // where it clears the sill and reads in the forward view. Reading outward
+    // from the tower toward the runway the pieces stack:
+    //   apron → parked jets nose-in (tails toward tower) → terminal piers →
+    //   parallel (120) → runway (0) → bay.  Jets sit in FRONT of the halls so the
+    //   controller reads a row of gleaming tails and swept wings, terminals
+    //   behind, the field and bay beyond.
+    static let apronS0 = 700.0, apronS1 = 3700.0     // along the runway, wide midfield span
+    static let apronP0 = 210.0, apronP1 = 560.0      // apron slab: terminal face → toward tower
+    static let gateLineP = 440.0                     // where parked jets nose in (tails toward tower)
+    static let terminalFaceP = 230.0                 // curved terminal front (horseshoe belly, gate side)
+
+    static func build(into root: SCNNode, airport: AirportLayout, bank: AirfieldLightBank) {
+        let frame = FieldFrame(airport)
+        root.addChildNode(apronNode(airport: airport, frame: frame))
+        root.addChildNode(terminalCityNode(airport: airport, frame: frame, bank: bank))
+        root.addChildNode(parkedFleetNode(airport: airport, frame: frame))
+        root.addChildNode(groundClutterNode(airport: airport, frame: frame, bank: bank))
+        root.addChildNode(controlTowerNode(airport: airport, bank: bank))
+        for node in approachLightNodes(airport: airport, frame: frame, bank: bank) {
+            root.addChildNode(node)
+        }
+        for node in runwayLightNodes(airport: airport, frame: frame, bank: bank) {
+            root.addChildNode(node)
+        }
+        root.addChildNode(taxiwayLightNode(airport: airport, frame: frame, bank: bank))
+        root.addChildNode(windsockNode(airport: airport, frame: frame, bank: bank))
+        root.addChildNode(apronFloodNode(airport: airport, frame: frame, bank: bank))
+    }
+
+    // MARK: - Shared lamp helpers (mirror WorldDetailsBuilder's, kept local so
+    // the KAVX code stays untouched). An additive halo cross carries the
+    // oversized-at-dusk glow read; the tiny lens sphere is the daytime lamp.
+
+    private static func haloMaterial(color: UIColor) -> SCNMaterial {
+        let m = SCNMaterial()
+        m.lightingModel = .constant
+        m.diffuse.contents = UIColor.black
+        m.emission.contents = color
+        m.emission.intensity = 0
+        m.blendMode = .add
+        m.writesToDepthBuffer = false
+        m.isDoubleSided = true
+        return m
+    }
+
+    private static func haloCross(size: CGFloat, material: SCNMaterial) -> SCNNode {
+        let node = SCNNode()
+        for yaw in [Float(0), .pi / 2] {
+            let plane = SCNPlane(width: size, height: size)
+            plane.materials = [material]
+            let q = SCNNode(geometry: plane)
+            q.eulerAngles.y = yaw
+            node.addChildNode(q)
+        }
+        return node
+    }
+
+    /// A ground lamp: short stake + warm/coloured lens sphere + additive halo,
+    /// all at flat field height (y = 0). `haloSize` scales the dusk bloom.
+    private static func lamp(worldAt w: V2, stake: SCNMaterial, lens: SCNMaterial,
+                             halo: SCNMaterial, haloSize: CGFloat, height: Double = 0.42,
+                             parent: SCNNode) {
+        let post = SCNNode(geometry: SCNCylinder(radius: 0.06, height: CGFloat(height * 0.72)))
+        post.geometry?.materials = [stake]
+        post.position = worldV3(w, height * 0.36)
+        parent.addChildNode(post)
+        let head = SCNNode(geometry: SCNSphere(radius: 0.24))
+        head.geometry?.materials = [lens]
+        head.position = worldV3(w, height)
+        parent.addChildNode(head)
+        let glow = haloCross(size: haloSize, material: halo)
+        glow.position = worldV3(w, height + 0.03)
+        parent.addChildNode(glow)
+    }
+
+    // MARK: - Apron pavement (pale grooved concrete slab in front of the
+    // terminals, riding the flat field just proud of the runway/taxiway)
+
+    private static func apronNode(airport: AirportLayout, frame: FieldFrame) -> SCNNode {
+        var mesh = WorldMesh()
+        let up = SIMD3<Float>(0, 1, 0)
+        let cols = 22, rows = 8
+        var grid: [[Int32]] = []
+        for r in 0...rows {
+            var rowIdx: [Int32] = []
+            let p = apronP0 + (apronP1 - apronP0) * Double(r) / Double(rows)
+            for c in 0...cols {
+                let s = apronS0 + (apronS1 - apronS0) * Double(c) / Double(cols)
+                let w = frame.point(s: s, p: p)
+                let y = airport.groundHeight(at: w) + 0.05
+                rowIdx.append(mesh.add(worldF3(w, y), up,
+                                       SIMD2(Float(Double(c) / Double(cols) * 6),
+                                             Float(Double(r) / Double(rows) * 2))))
+            }
+            grid.append(rowIdx)
+        }
+        for r in 0..<rows {
+            for c in 0..<cols {
+                mesh.quad(grid[r][c], grid[r][c + 1], grid[r + 1][c + 1], grid[r + 1][c],
+                          desiredNormal: up)
+            }
+        }
+        // Pale concrete apron with painted lead-in lines + gate marks baked in.
+        let tex = apronTexture()
+        let mat = WorldMat.pbr(tex, roughness: 0.8)
+        mat.diffuse.wrapS = .repeat
+        mat.diffuse.wrapT = .repeat
+        mat.diffuse.maxAnisotropy = 16
+        let node = SCNNode(geometry: mesh.build(material: mat))
+        node.name = "jfkApron"
+        return node
+    }
+
+    /// Tileable pale apron concrete: light grooved slabs, oil ghosts, a couple
+    /// of yellow lead-in lines. Inline so WorldMaterials.swift stays untouched.
+    private static func apronTexture() -> UIImage {
+        WorldTex.image(CGSize(width: 512, height: 512)) { ctx, size in
+            ctx.setFillColor(worldColor(0.560, 0.552, 0.532).cgColor)   // pale concrete
+            ctx.fill(CGRect(origin: .zero, size: size))
+            WorldTex.speckle(ctx, size: size, count: 1600, seed: 0x5A17, radius: 0.7...3.0,
+                             colors: [(worldColor(0.64, 0.63, 0.61), 0.10),
+                                      (worldColor(0.44, 0.44, 0.43), 0.09),
+                                      (worldColor(0.58, 0.55, 0.50), 0.05)], wrap: true)
+            // Saw-cut slab grid.
+            ctx.setStrokeColor(worldColor(0.40, 0.40, 0.39, 0.55).cgColor)
+            ctx.setLineWidth(2.0)
+            for i in 1..<8 {
+                let x = size.width * CGFloat(i) / 8
+                ctx.move(to: CGPoint(x: x, y: 0)); ctx.addLine(to: CGPoint(x: x, y: size.height))
+                let y = size.height * CGFloat(i) / 8
+                ctx.move(to: CGPoint(x: 0, y: y)); ctx.addLine(to: CGPoint(x: size.width, y: y))
+            }
+            ctx.strokePath()
+            // A yellow lead-in line curving through (gate guidance).
+            ctx.setStrokeColor(worldColor(0.82, 0.66, 0.14, 0.9).cgColor)
+            ctx.setLineWidth(4)
+            ctx.move(to: CGPoint(x: size.width * 0.12, y: 0))
+            ctx.addCurve(to: CGPoint(x: size.width * 0.5, y: size.height),
+                         control1: CGPoint(x: size.width * 0.2, y: size.height * 0.4),
+                         control2: CGPoint(x: size.width * 0.55, y: size.height * 0.6))
+            ctx.strokePath()
+            // Jet-blast oil ghosts.
+            WorldTex.speckle(ctx, size: size, count: 22, seed: 0x5A18, radius: 18...54,
+                             colors: [(worldColor(0.34, 0.33, 0.32), 0.10),
+                                      (worldColor(0.42, 0.41, 0.39), 0.07)], wrap: true)
+        }
+    }
+
+    // MARK: - Terminal City (the curved glass-and-metal horseshoe)
+
+    private static func terminalCityNode(airport: AirportLayout, frame: FieldFrame,
+                                         bank: AirfieldLightBank) -> SCNNode {
+        let container = SCNNode()
+
+        // Glass-and-metal palette.
+        let curtainWall = WorldMat.pbr(terminalGlassTexture(), roughness: 0.28, metalness: 0.45,
+                                       wrap: true)
+        let metalFascia = WorldMat.pbr(worldColor(0.72, 0.73, 0.75), roughness: 0.4, metalness: 0.65)
+        let roofMetal = WorldMat.pbr(worldColor(0.60, 0.61, 0.63), roughness: 0.55, metalness: 0.5)
+        // Warm window glow that ramps on at dusk (shared across the terminals).
+        let windowGlow = SCNMaterial()
+        windowGlow.lightingModel = .constant
+        windowGlow.diffuse.contents = worldColor(0.10, 0.11, 0.13)
+        bank.register(material: windowGlow, color: worldColor(1.0, 0.80, 0.46),
+                      onHour: WorldDetailsBuilder.windowsOnHour, ramp: 0.006, night: 2.8)
+
+        // The horseshoe is an arc of terminal "piers." Their gate face (where the
+        // jet bridges and parked jets are) points toward the TOWER (+p) so the
+        // controller sees the ramp, the bridges, and the parked metal in front of
+        // the halls — not a blank wall. Piers near the ends bow a little toward
+        // the tower so the whole run reads as one curved Terminal City crescent.
+        let pierCount = 6
+        let sSpan = apronS1 - apronS0
+        for i in 0..<pierCount {
+            let t = (Double(i) + 0.5) / Double(pierCount)
+            let sCenter = apronS0 + 140 + (sSpan - 280) * t
+            let bow = 1.0 - 4.0 * (t - 0.5) * (t - 0.5)         // 0 at ends, 1 mid
+            let pFace = terminalFaceP + 26.0 * bow              // belly bows toward the tower
+            let arcYaw = (t - 0.5) * 0.34                        // radians, fans the piers
+            container.addChildNode(terminalPier(airport: airport, frame: frame,
+                                                 sCenter: sCenter, pFace: pFace, arcYaw: arcYaw,
+                                                 length: (sSpan - 280) / Double(pierCount) - 24,
+                                                 glass: curtainWall, fascia: metalFascia,
+                                                 roof: roofMetal, glow: windowGlow, seed: UInt64(0xA00 + i)))
+        }
+
+        // A central head-house block joining the piers (the horseshoe crown),
+        // taller, set back from the gate line on the runway side (lower p).
+        let headS = (apronS0 + apronS1) / 2
+        container.addChildNode(headHouse(airport: airport, frame: frame,
+                                         sCenter: headS, pFace: terminalFaceP - 46,
+                                         glass: curtainWall, fascia: metalFascia,
+                                         roof: roofMetal, glow: windowGlow))
+
+        let flat = container.flattenedClone()
+        flat.name = "terminalCity"
+        return flat
+    }
+
+    /// One terminal pier: a long low glazed hall + metal roof fascia + a fan of
+    /// jet bridges reaching from its gate face toward the parked jets.
+    private static func terminalPier(airport: AirportLayout, frame: FieldFrame,
+                                     sCenter: Double, pFace: Double, arcYaw: Double,
+                                     length: Double, glass: SCNMaterial, fascia: SCNMaterial,
+                                     roof: SCNMaterial, glow: SCNMaterial, seed: UInt64) -> SCNNode {
+        let w = frame.point(s: sCenter, p: pFace)
+        let node = SCNNode()
+        node.position = worldV3(w, 0)
+        // Face +Z toward the TOWER (higher p) = +frame.perp, plus the arc yaw, so
+        // the gate face / jet bridges / warm glow present to the controller.
+        node.eulerAngles.y = worldYawFacing(frame.perp) + Float(arcYaw)
+
+        let hallL = CGFloat(length)             // along the runway axis (local X)
+        let hallD: CGFloat = 34                 // depth (local Z)
+        let hallH: CGFloat = 15
+
+        // Main glazed hall.
+        let hall = SCNNode(geometry: SCNBox(width: hallL, height: hallH, length: hallD,
+                                            chamferRadius: 0.6))
+        // Box faces: +Z,+X,-Z,-X,+Y,-Y. Curtain glass all round; metal roof on +Y.
+        hall.geometry?.materials = [glass, glass, glass, glass, roof, fascia]
+        hall.position = SCNVector3(0, Float(hallH / 2), 0)
+        node.addChildNode(hall)
+
+        // Cantilevered metal roof fascia band capping the glass.
+        let cap = SCNNode(geometry: SCNBox(width: hallL + 2.4, height: 1.1, length: hallD + 2.4,
+                                           chamferRadius: 0.3))
+        cap.geometry?.materials = [fascia]
+        cap.position = SCNVector3(0, Float(hallH) + 0.4, 0)
+        node.addChildNode(cap)
+
+        // Warm interior glow band, seen through the curtain wall at dusk, on the
+        // runway-facing (+Z) side.
+        let glowBand = SCNNode(geometry: SCNPlane(width: hallL - 2, height: hallH * 0.5))
+        glowBand.geometry?.materials = [glow]
+        glowBand.position = SCNVector3(0, Float(hallH * 0.42), Float(hallD / 2) + 0.05)
+        node.addChildNode(glowBand)
+
+        // Jet bridges fanning out from the gate face toward the apron (+Z).
+        var rng = WorldRand(seed: seed)
+        let bridgeCount = max(2, Int(length / 44))
+        for b in 0..<bridgeCount {
+            let bx = Float(-hallL / 2 + hallL * (CGFloat(b) + 0.5) / CGFloat(bridgeCount))
+            let bridge = jetBridge(fascia: fascia, glass: glass, length: rng.range(15, 20))
+            bridge.position = SCNVector3(bx, 3.2, Float(hallD / 2) + 0.2)
+            // Small splay so they fan.
+            bridge.eulerAngles.y = Float(rng.range(-0.12, 0.12))
+            node.addChildNode(bridge)
+        }
+        return node
+    }
+
+    /// A jet bridge: a raised glazed gangway box on a support leg, reaching +Z.
+    private static func jetBridge(fascia: SCNMaterial, glass: SCNMaterial, length: Double) -> SCNNode {
+        let n = SCNNode()
+        let gangway = SCNNode(geometry: SCNBox(width: 2.4, height: 2.6, length: CGFloat(length),
+                                               chamferRadius: 0.3))
+        gangway.geometry?.materials = [glass, fascia, glass, fascia, fascia, fascia]
+        gangway.position = SCNVector3(0, 0, Float(length / 2))
+        n.addChildNode(gangway)
+        // Rotunda drum at the terminal end.
+        let drum = SCNNode(geometry: SCNCylinder(radius: 1.9, height: 3.0))
+        drum.geometry?.materials = [fascia]
+        drum.position = SCNVector3(0, -0.2, 0)
+        n.addChildNode(drum)
+        // Support leg near the cab end.
+        let leg = SCNNode(geometry: SCNBox(width: 0.5, height: 3.2, length: 0.5, chamferRadius: 0.08))
+        leg.geometry?.materials = [fascia]
+        leg.position = SCNVector3(0, -1.8, Float(length * 0.7))
+        n.addChildNode(leg)
+        return n
+    }
+
+    /// The central head-house — a taller crown block with a curved glazed front.
+    private static func headHouse(airport: AirportLayout, frame: FieldFrame,
+                                  sCenter: Double, pFace: Double, glass: SCNMaterial,
+                                  fascia: SCNMaterial, roof: SCNMaterial, glow: SCNMaterial) -> SCNNode {
+        let w = frame.point(s: sCenter, p: pFace)
+        let node = SCNNode()
+        node.position = worldV3(w, 0)
+        node.eulerAngles.y = worldYawFacing(-frame.perp)
+
+        let bw: CGFloat = 150, bd: CGFloat = 40, bh: CGFloat = 20
+        let block = SCNNode(geometry: SCNBox(width: bw, height: bh, length: bd, chamferRadius: 1.2))
+        block.geometry?.materials = [glass, glass, glass, glass, roof, fascia]
+        block.position = SCNVector3(0, Float(bh / 2), 0)
+        node.addChildNode(block)
+        // Swept roof fascia.
+        let cap = SCNNode(geometry: SCNBox(width: bw + 4, height: 1.6, length: bd + 4, chamferRadius: 0.6))
+        cap.geometry?.materials = [fascia]
+        cap.position = SCNVector3(0, Float(bh) + 0.6, 0)
+        node.addChildNode(cap)
+        // Big warm glow curtain on the runway face at dusk.
+        let glowBand = SCNNode(geometry: SCNPlane(width: bw - 4, height: bh * 0.55))
+        glowBand.geometry?.materials = [glow]
+        glowBand.position = SCNVector3(0, Float(bh * 0.45), Float(bd / 2) + 0.06)
+        node.addChildNode(glowBand)
+        return node
+    }
+
+    /// Curtain-wall glass: cool dark mullioned panels with a warm low-sun
+    /// reflection gradient so the terminals glint at golden hour.
+    private static func terminalGlassTexture() -> UIImage {
+        WorldTex.image(CGSize(width: 256, height: 128)) { ctx, size in
+            ctx.setFillColor(worldColor(0.13, 0.17, 0.21).cgColor)
+            ctx.fill(CGRect(origin: .zero, size: size))
+            // Warm sky/sun reflection raking down from the top.
+            let colors = [worldColor(0.86, 0.66, 0.44, 0.55).cgColor,
+                          worldColor(0.30, 0.34, 0.40, 0.12).cgColor,
+                          worldColor(0.10, 0.14, 0.20, 0.0).cgColor] as CFArray
+            if let g = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                  colors: colors, locations: [0, 0.5, 1]) {
+                ctx.drawLinearGradient(g, start: .zero,
+                                       end: CGPoint(x: 0, y: size.height), options: [])
+            }
+            // Vertical mullions.
+            ctx.setFillColor(worldColor(0.55, 0.57, 0.60, 0.7).cgColor)
+            for x in stride(from: 0, to: Int(size.width), by: 12) {
+                ctx.fill(CGRect(x: CGFloat(x), y: 0, width: 2, height: size.height))
+            }
+            // Horizontal floor bands.
+            for y in stride(from: 0, to: Int(size.height), by: 26) {
+                ctx.fill(CGRect(x: 0, y: CGFloat(y), width: size.width, height: 2))
+            }
+        }
+    }
+
+    // MARK: - Static parked fleet (a few widebodies at the gates, for scale).
+    // Deliberately lightweight silhouettes — a swept low wing, a tall tail fin,
+    // podded engines — flattened, never animated. Nose-in at the gate line.
+
+    private static func parkedFleetNode(airport: AirportLayout, frame: FieldFrame) -> SCNNode {
+        let container = SCNNode()
+        var rng = WorldRand(seed: 0x7E7C)
+        // Fictional flag-carrier tail accents (no real branding).
+        let tails: [UIColor] = [
+            worldColor(0.14, 0.28, 0.52),   // deep navy
+            worldColor(0.62, 0.16, 0.18),   // crimson
+            worldColor(0.10, 0.42, 0.36),   // teal
+            worldColor(0.36, 0.20, 0.46),   // plum
+        ]
+        // A row of big widebodies at the gates, spaced ~150 m so their swept
+        // wings don't overlap. They nose IN toward the terminal (toward -perp /
+        // lower p), tails toward the tower — so the controller reads a line of
+        // gleaming tails and wings on the near apron, terminals behind. Kept to
+        // proper widebody scale (~70+ m) so they carry from the ~90 m cab.
+        var s = apronS0 + 160
+        var idx = 0
+        while s < apronS1 - 160 {
+            let w = frame.point(s: s, p: gateLineP)
+            let jet = parkedAirliner(bodyLen: rng.range(70, 80), span: rng.range(64, 72),
+                                     tail: tails[idx % tails.count], seed: 0x100 &+ UInt64(idx))
+            jet.position = worldV3(w, 0)
+            // Nose toward the terminal (-perp); model is built nose along +Z.
+            jet.eulerAngles.y = worldYawFacing(-frame.perp) + Float(rng.range(-0.04, 0.04))
+            container.addChildNode(jet)
+            s += rng.range(150, 175)
+            idx += 1
+        }
+        let flat = container.flattenedClone()
+        flat.name = "parkedFleet"
+        return flat
+    }
+
+    /// A generic widebody silhouette (fuselage tube, swept low wing, podded
+    /// engines, tall swept fin). Nose along +Z. Read-only detail, flattened.
+    private static func parkedAirliner(bodyLen: Double, span: Double, tail: UIColor,
+                                       seed: UInt64) -> SCNNode {
+        let n = SCNNode()
+        let fuseR = 3.0
+        let hull = WorldMat.pbr(worldColor(0.90, 0.90, 0.90), roughness: 0.35, metalness: 0.25)
+        let wingMat = WorldMat.pbr(worldColor(0.82, 0.83, 0.85), roughness: 0.4, metalness: 0.3)
+        let engMat = WorldMat.pbr(worldColor(0.30, 0.31, 0.33), roughness: 0.45, metalness: 0.5)
+        let tailMat = WorldMat.pbr(tail, roughness: 0.5, metalness: 0.2)
+        let gearMat = WorldMat.pbr(worldColor(0.12, 0.12, 0.13), roughness: 0.8)
+
+        // Fuselage (capsule = cylinder + nose/tail cones), sitting on gear so the
+        // belly clears the ground ~ fuseR + 1.4.
+        let bellyY = Float(fuseR + 1.4)
+        let tube = SCNNode(geometry: SCNCylinder(radius: CGFloat(fuseR), height: CGFloat(bodyLen * 0.7)))
+        tube.geometry?.materials = [hull]
+        tube.eulerAngles.x = .pi / 2                     // long axis along Z
+        tube.position = SCNVector3(0, bellyY, 0)
+        n.addChildNode(tube)
+        let nose = SCNNode(geometry: SCNCone(topRadius: 0.2, bottomRadius: CGFloat(fuseR),
+                                             height: CGFloat(bodyLen * 0.2)))
+        nose.geometry?.materials = [hull]
+        nose.eulerAngles.x = -.pi / 2
+        nose.position = SCNVector3(0, bellyY, Float(bodyLen * 0.45))
+        n.addChildNode(nose)
+        let tailcone = SCNNode(geometry: SCNCone(topRadius: 0.15, bottomRadius: CGFloat(fuseR),
+                                                 height: CGFloat(bodyLen * 0.22)))
+        tailcone.geometry?.materials = [hull]
+        tailcone.eulerAngles.x = .pi / 2
+        tailcone.position = SCNVector3(0, bellyY + 0.7, Float(-bodyLen * 0.44))
+        n.addChildNode(tailcone)
+
+        // Low swept wing (a thin swept box each side), at mid-body.
+        for sgn in [-1.0, 1.0] {
+            let wing = SCNNode(geometry: SCNBox(width: CGFloat(span / 2), height: 0.7,
+                                                length: CGFloat(bodyLen * 0.26), chamferRadius: 0.3))
+            wing.geometry?.materials = [wingMat]
+            wing.position = SCNVector3(Float(sgn) * Float(span / 4), bellyY - 1.2, Float(-bodyLen * 0.02))
+            wing.eulerAngles.y = Float(sgn) * 0.38        // sweep
+            n.addChildNode(wing)
+            // One podded engine slung under each wing.
+            let eng = SCNNode(geometry: SCNCylinder(radius: 1.5, height: 5.0))
+            eng.geometry?.materials = [engMat]
+            eng.eulerAngles.x = .pi / 2
+            eng.position = SCNVector3(Float(sgn) * Float(span * 0.24), bellyY - 2.6, Float(bodyLen * 0.04))
+            n.addChildNode(eng)
+        }
+
+        // Horizontal stabilizers.
+        for sgn in [-1.0, 1.0] {
+            let stab = SCNNode(geometry: SCNBox(width: CGFloat(span * 0.16), height: 0.5,
+                                                length: CGFloat(bodyLen * 0.12), chamferRadius: 0.2))
+            stab.geometry?.materials = [wingMat]
+            stab.position = SCNVector3(Float(sgn) * Float(span * 0.10), bellyY + 1.0, Float(-bodyLen * 0.40))
+            stab.eulerAngles.y = Float(sgn) * 0.42
+            n.addChildNode(stab)
+        }
+
+        // Tall swept vertical fin, painted in the carrier tail colour.
+        var fin = WorldMesh()
+        let finH = Float(fuseR * 3.6)
+        let finRootZ0 = Float(-bodyLen * 0.30), finRootZ1 = Float(-bodyLen * 0.45)
+        let baseY = bellyY + Float(fuseR) - 0.3
+        let f0 = fin.add(SIMD3(0, baseY, finRootZ0), SIMD3(1, 0, 0), SIMD2(0, 1))
+        let f1 = fin.add(SIMD3(0, baseY, finRootZ1), SIMD3(1, 0, 0), SIMD2(1, 1))
+        let f2 = fin.add(SIMD3(0, baseY + finH, finRootZ1 + 3), SIMD3(1, 0, 0), SIMD2(1, 0))
+        let f3 = fin.add(SIMD3(0, baseY + finH, finRootZ0 - 1.5), SIMD3(1, 0, 0), SIMD2(0, 0))
+        fin.quad(f0, f1, f2, f3, desiredNormal: SIMD3(1, 0, 0))
+        let finMat = tailMat.copy() as! SCNMaterial
+        finMat.isDoubleSided = true
+        n.addChildNode(SCNNode(geometry: fin.build(material: finMat)))
+
+        // A hint of main + nose gear so it stands, not floats.
+        for gz in [Float(bodyLen * 0.30), Float(-bodyLen * 0.05)] {
+            for gx in gz > 0 ? [Float(0)] : [Float(-3), Float(3)] {
+                let strut = SCNNode(geometry: SCNCylinder(radius: 0.25, height: CGFloat(bellyY - 1.5)))
+                strut.geometry?.materials = [gearMat]
+                strut.position = SCNVector3(gx, (bellyY - 1.5) / 2, gz)
+                n.addChildNode(strut)
+            }
+        }
+        return n
+    }
+
+    // MARK: - Ground clutter (tugs, GSE carts, light poles on the apron)
+
+    private static func groundClutterNode(airport: AirportLayout, frame: FieldFrame,
+                                          bank: AirfieldLightBank) -> SCNNode {
+        let container = SCNNode()
+        var rng = WorldRand(seed: 0x6547)
+
+        let tugPaints = [worldColor(0.85, 0.72, 0.10), worldColor(0.80, 0.30, 0.14),
+                         worldColor(0.20, 0.42, 0.66)]
+        let dark = WorldMat.pbr(worldColor(0.12, 0.12, 0.13), roughness: 0.8)
+        let grey = WorldMat.pbr(worldColor(0.55, 0.55, 0.57), roughness: 0.6, metalness: 0.3)
+
+        // A pushback tug: a low two-box wedge on four small wheels.
+        func tug(at w: V2, yaw: Double, paint: UIColor) {
+            let t = SCNNode()
+            t.position = worldV3(w, 0)
+            t.eulerAngles.y = Float(yaw)
+            let paintMat = WorldMat.pbr(paint, roughness: 0.45, metalness: 0.3)
+            let body = SCNNode(geometry: SCNBox(width: 2.6, height: 1.1, length: 5.5, chamferRadius: 0.3))
+            body.geometry?.materials = [paintMat]
+            body.position = SCNVector3(0, 0.95, 0)
+            t.addChildNode(body)
+            let cab = SCNNode(geometry: SCNBox(width: 2.2, height: 1.0, length: 1.8, chamferRadius: 0.25))
+            cab.geometry?.materials = [grey]
+            cab.position = SCNVector3(0, 1.9, -1.0)
+            t.addChildNode(cab)
+            for (dx, dz) in [(-1.1, 1.7), (1.1, 1.7), (-1.1, -1.7), (1.1, -1.7)] {
+                let wh = SCNNode(geometry: SCNCylinder(radius: 0.45, height: 0.4))
+                wh.geometry?.materials = [dark]
+                wh.eulerAngles.z = .pi / 2
+                wh.position = SCNVector3(Float(dx), 0.45, Float(dz))
+                t.addChildNode(wh)
+            }
+            container.addChildNode(t)
+        }
+        // A baggage-cart train: a couple of small open boxes.
+        func cartTrain(at w: V2, yaw: Double) {
+            let train = SCNNode()
+            train.position = worldV3(w, 0)
+            train.eulerAngles.y = Float(yaw)
+            for k in 0..<3 {
+                let cart = SCNNode(geometry: SCNBox(width: 1.6, height: 1.2, length: 2.4, chamferRadius: 0.15))
+                cart.geometry?.materials = [grey]
+                cart.position = SCNVector3(0, 0.9, Float(k) * 3.0)
+                train.addChildNode(cart)
+                for dx in [-0.7, 0.7] {
+                    let wh = SCNNode(geometry: SCNCylinder(radius: 0.3, height: 0.25))
+                    wh.geometry?.materials = [dark]
+                    wh.eulerAngles.z = .pi / 2
+                    wh.position = SCNVector3(Float(dx), 0.3, Float(k) * 3.0)
+                    train.addChildNode(wh)
+                }
+            }
+            container.addChildNode(train)
+        }
+
+        // Scatter GSE across the near apron (tower side of the jets, higher p)
+        // so tugs and cart trains read in the foreground against the pale slab.
+        var s = apronS0 + 160
+        var idx = 0
+        while s < apronS1 - 140 {
+            let baseW = frame.point(s: s + rng.range(-30, 30), p: gateLineP + rng.range(28, 70))
+            tug(at: baseW, yaw: Double(worldYawFacing(frame.perp)) + rng.range(-0.4, 0.4),
+                paint: tugPaints[idx % tugPaints.count])
+            let cartW = frame.point(s: s + rng.range(-40, 40), p: gateLineP + rng.range(40, 100))
+            cartTrain(at: cartW, yaw: Double(worldYawFacing(frame.dir)) + rng.range(-0.3, 0.3))
+            s += rng.range(150, 185)
+            idx += 1
+        }
+
+        // Tall apron flood/light poles down the gate line — heads glow at dusk.
+        let poleMat = WorldMat.pbr(worldColor(0.40, 0.41, 0.43), roughness: 0.5, metalness: 0.5)
+        let headGlow = SCNMaterial()
+        headGlow.lightingModel = .constant
+        headGlow.diffuse.contents = worldColor(0.2, 0.18, 0.14)
+        bank.register(material: headGlow, color: worldColor(1.0, 0.86, 0.58),
+                      onHour: WorldDetailsBuilder.apronFloodOnHour, ramp: 0.008, night: 3.6)
+        let poleHalo = haloMaterial(color: worldColor(1.0, 0.86, 0.58))
+        bank.register(material: poleHalo, color: worldColor(1.0, 0.86, 0.58),
+                      onHour: WorldDetailsBuilder.apronFloodOnHour, ramp: 0.008, night: 2.6)
+        var ps = apronS0 + 120.0
+        while ps < apronS1 - 80 {
+            let w = frame.point(s: ps, p: apronP1 - 18)
+            let pole = SCNNode(geometry: SCNCylinder(radius: 0.22, height: 22))
+            pole.geometry?.materials = [poleMat]
+            pole.position = worldV3(w, 11)
+            container.addChildNode(pole)
+            // Cross-arm head with a cluster of lamps.
+            let head = SCNNode(geometry: SCNBox(width: 4.0, height: 0.5, length: 0.6, chamferRadius: 0.1))
+            head.geometry?.materials = [headGlow]
+            head.position = worldV3(w, 21.6)
+            head.eulerAngles.y = worldYawFacing(frame.dir)
+            container.addChildNode(head)
+            let glow = haloCross(size: 7.0, material: poleHalo)
+            glow.position = worldV3(w, 21.6)
+            container.addChildNode(glow)
+            ps += 260
+        }
+
+        let flat = container.flattenedClone()
+        flat.name = "jfkGroundClutter"
+        return flat
+    }
+
+    // MARK: - Control tower (tall Pei-Cobb glass-and-metal tower at the cab eye).
+    // Same sightline discipline as the KAVX towerNode: the cab interior owns the
+    // eye-level band, so the exterior shaft/fascia stay OUT of the glass sightline
+    // (fascia below the sill, roof above the ceiling).
+
+    private static func controlTowerNode(airport: AirportLayout, bank: AirfieldLightBank) -> SCNNode {
+        let container = SCNNode()
+        let eye = airport.towerCabEye
+        let ground2D = V2(eye.x, eye.z)
+        let groundY = airport.groundHeight(at: ground2D)     // 0 (flat)
+        let floorY = eye.y - 1.72
+        let sillTopY = eye.y - 0.78
+        let roofY = eye.y + 1.55
+        func at(_ y: Double) -> SCNVector3 { SCNVector3(Float(eye.x), Float(y), Float(eye.z)) }
+
+        let concrete = WorldMat.pbr(worldColor(0.66, 0.65, 0.63), roughness: 0.7, metalness: 0.1)
+        let metal = WorldMat.pbr(worldColor(0.70, 0.72, 0.74), roughness: 0.4, metalness: 0.6)
+        let shaftGlass = WorldMat.pbr(terminalGlassTexture(), roughness: 0.3, metalness: 0.45, wrap: true)
+
+        // Slim tapered concrete/glass shaft rising the full ~88 m to the cab. A
+        // fluted look via three stacked segments with a glazed stair spine facing
+        // the terminals.
+        let shaftH = floorY - groundY + 0.4
+        let shaft = SCNNode(geometry: SCNCylinder(radius: 3.4, height: CGFloat(shaftH)))
+        shaft.geometry?.materials = [concrete]
+        shaft.position = at(groundY + shaftH / 2 - 0.4)
+        container.addChildNode(shaft)
+        // Glazed vertical stair spine (a tall thin glass box on the +X face).
+        let spine = SCNNode(geometry: SCNBox(width: 2.0, height: CGFloat(shaftH), length: 1.4,
+                                             chamferRadius: 0.2))
+        spine.geometry?.materials = [shaftGlass]
+        spine.position = SCNVector3(Float(eye.x) + 3.2, Float(groundY + shaftH / 2 - 0.4), Float(eye.z))
+        container.addChildNode(spine)
+
+        // Flared equipment collar just under the cab.
+        let flare = SCNNode(geometry: SCNCone(topRadius: 4.6, bottomRadius: 3.4, height: 2.2))
+        flare.geometry?.materials = [metal]
+        flare.position = at(floorY - 1.2)
+        container.addChildNode(flare)
+
+        // Catwalk ring + low rail (kept below the runway sightline).
+        let walk = SCNNode(geometry: SCNTube(innerRadius: 3.2, outerRadius: 4.4, height: 0.12))
+        walk.geometry?.materials = [metal]
+        walk.position = at(floorY - 0.05)
+        container.addChildNode(walk)
+        for railY in [floorY + 0.35, floorY + 0.72] {
+            let rail = SCNNode(geometry: SCNTorus(ringRadius: 4.3, pipeRadius: 0.035))
+            rail.geometry?.materials = [metal]
+            rail.position = at(railY)
+            container.addChildNode(rail)
+        }
+
+        // Sill fascia ring just outside the interior glass (tube, never fills the
+        // cab volume).
+        let sill = SCNNode(geometry: SCNTube(innerRadius: 2.52, outerRadius: 2.66,
+                                             height: CGFloat(sillTopY - floorY)))
+        sill.geometry?.materials = [metal]
+        sill.position = at((sillTopY + floorY) / 2)
+        container.addChildNode(sill)
+
+        // Cantilevered roof cap above the interior ceiling — a wide metal disc
+        // (the Pei-Cobb cab's oversailing roof).
+        let roofFascia = SCNNode(geometry: SCNTube(innerRadius: 2.45, outerRadius: 4.6, height: 0.4))
+        roofFascia.geometry?.materials = [metal]
+        roofFascia.position = at(roofY)
+        container.addChildNode(roofFascia)
+        let roofCap = SCNNode(geometry: SCNCylinder(radius: 4.7, height: 0.12))
+        roofCap.geometry?.materials = [metal]
+        roofCap.position = at(roofY + 0.26)
+        container.addChildNode(roofCap)
+
+        // Red obstruction beacon on the roof (dusk).
+        let beaconMat = SCNMaterial()
+        beaconMat.lightingModel = .constant
+        beaconMat.diffuse.contents = worldColor(0.3, 0.05, 0.03)
+        bank.register(material: beaconMat, color: worldColor(1.0, 0.18, 0.10),
+                      onHour: WorldDetailsBuilder.windowsOnHour, night: 4.5)
+        let beacon = SCNNode(geometry: SCNSphere(radius: 0.20))
+        beacon.geometry?.materials = [beaconMat]
+        beacon.position = at(roofY + 0.55)
+        container.addChildNode(beacon)
+        let beaconHalo = haloMaterial(color: worldColor(1.0, 0.20, 0.10))
+        bank.register(material: beaconHalo, color: worldColor(1.0, 0.20, 0.10),
+                      onHour: WorldDetailsBuilder.windowsOnHour, night: 3.2)
+        let bhalo = haloCross(size: 2.4, material: beaconHalo)
+        bhalo.position = at(roofY + 0.55)
+        container.addChildNode(bhalo)
+
+        let flat = container.flattenedClone()
+        flat.name = "controlTower"
+        return flat
+    }
+
+    // MARK: - Approach lighting (ALSF-style bar array over Jamaica Bay reaching
+    // toward the SE arrival end of 31L). Centerline barrettes step out from the
+    // threshold (s = 0) into negative s over the water; a 300 m crossbar; a
+    // sequenced-flasher run of strobes rippling in toward the runway.
+
+    private static func approachLightNodes(airport: AirportLayout, frame: FieldFrame,
+                                           bank: AirfieldLightBank) -> [SCNNode] {
+        var nodes: [SCNNode] = []
+        let stake = WorldMat.pbr(worldColor(0.28, 0.29, 0.30), roughness: 0.6, metalness: 0.4)
+        // Steady white centerline + crossbar barrettes.
+        let steadyContainer = SCNNode()
+        let lens = WorldMat.pbr(worldColor(0.55, 0.52, 0.46), roughness: 0.3)
+        bank.register(material: lens, color: worldColor(1.0, 0.94, 0.82),
+                      onHour: WorldDetailsBuilder.edgeLightsOnHour, night: 7.5)
+        let halo = haloMaterial(color: worldColor(1.0, 0.92, 0.78))
+        bank.register(material: halo, color: worldColor(1.0, 0.92, 0.78),
+                      onHour: WorldDetailsBuilder.edgeLightsOnHour, night: 3.6)
+
+        // Bars sit on stanchions over the bay: the field is flat at y=0, so posts
+        // over water raise the lamp plane back up to threshold height (0.4 m).
+        let barSpacing = 30.0            // ~100 ft between centerline bars
+        let barCount = 24                // ~720 m of approach lights
+        for i in 1...barCount {
+            let s = -Double(i) * barSpacing
+            // 5-lamp centerline barrette straddling the extended centerline.
+            for k in -2...2 {
+                let w = frame.point(s: s, p: Double(k) * 1.4)
+                lamp(worldAt: w, stake: stake, lens: lens, halo: halo, haloSize: 2.2,
+                     parent: steadyContainer)
+            }
+        }
+        // 300 m (1000 ft) crossbar — a wide row of lamps across the approach.
+        let crossS = -300.0
+        for k in -14...14 {
+            let w = frame.point(s: crossS, p: Double(k) * 1.5)
+            lamp(worldAt: w, stake: stake, lens: lens, halo: halo, haloSize: 2.4,
+                 parent: steadyContainer)
+        }
+        let steady = steadyContainer.flattenedClone()
+        steady.name = "approachLightsSteady"
+        nodes.append(steady)
+
+        // Sequenced flashers: a run of strobes stepping out along the centerline
+        // that ripple inward toward the runway (the "rabbit"). Each fires a quick
+        // flash on a staggered phase so the run reads as a chasing pulse.
+        let flashContainer = SCNNode()
+        let n = 18
+        for i in 0..<n {
+            let s = -Double(i + 1) * barSpacing
+            let w = frame.point(s: s, p: 0)
+            let strobe = SCNMaterial()
+            strobe.lightingModel = .constant
+            strobe.diffuse.contents = UIColor.black
+            strobe.emission.contents = worldColor(1.0, 1.0, 0.98)
+            strobe.emission.intensity = 7.0
+            strobe.blendMode = .add
+            strobe.writesToDepthBuffer = false
+            strobe.isDoubleSided = true
+            let glow = haloCross(size: 3.0, material: strobe)
+            glow.position = worldV3(w, 0.5)
+            glow.opacity = 0
+            // The rabbit: bright pulse sweeps threshold-ward. Phase later the
+            // FARTHER the bar (larger i) so the flash appears to run inward.
+            let phase = Double(n - 1 - i) / Double(n) * 0.9      // seconds into the 1 s cycle
+            let seq = SCNAction.sequence([
+                .wait(duration: phase),
+                .fadeOpacity(to: 1.0, duration: 0.04),
+                .fadeOpacity(to: 0.0, duration: 0.10),
+                .wait(duration: max(0.0, 0.86 - phase)),
+            ])
+            glow.runAction(.repeatForever(seq))
+            flashContainer.addChildNode(glow)
+        }
+        // Dusk gate on the whole rabbit: hidden by day, shown once the approach
+        // lights ramp on. A zero-height gate material the bank drives via a proxy
+        // is overkill here; instead ride node opacity off a simple fade action
+        // that is only meaningful after edgeLightsOnHour — the strobes are pure
+        // additive so by day (dark sky excluded) they read only against dusk.
+        flashContainer.name = "approachRabbit"
+        nodes.append(flashContainer)
+        return nodes
+    }
+
+    // MARK: - Runway edge + threshold lights (high-intensity white edges the full
+    // 4423 m; green threshold bar at the 31L arrival end, red at the far end).
+
+    private static func runwayLightNodes(airport: AirportLayout, frame: FieldFrame,
+                                         bank: AirfieldLightBank) -> [SCNNode] {
+        var nodes: [SCNNode] = []
+        let stake = WorldMat.pbr(worldColor(0.45, 0.44, 0.42), roughness: 0.7, metalness: 0.3)
+        let length = airport.runway.length
+        let lateral = airport.runway.width / 2 + 3.0
+
+        // White edge lights in 6 marching groups (staggered dusk switch-on),
+        // spaced ~60 m like a real HIRL system.
+        let groupCount = 6
+        for g in 0..<groupCount {
+            let container = SCNNode()
+            let onHour = WorldDetailsBuilder.edgeLightsOnHour
+                + Double(g) * WorldDetailsBuilder.edgeLightGroupStagger
+            let lens = WorldMat.pbr(worldColor(0.55, 0.50, 0.44), roughness: 0.3)
+            bank.register(material: lens, color: worldColor(1.0, 0.90, 0.66), onHour: onHour, night: 7.0)
+            let halo = haloMaterial(color: worldColor(1.0, 0.90, 0.66))
+            bank.register(material: halo, color: worldColor(1.0, 0.90, 0.66), onHour: onHour, night: 3.2)
+            let s0 = length * Double(g) / Double(groupCount)
+            let s1 = length * Double(g + 1) / Double(groupCount)
+            var s = s0 + 30
+            while s < s1 {
+                for side in [-1.0, 1.0] {
+                    lamp(worldAt: frame.point(s: s, p: side * lateral),
+                         stake: stake, lens: lens, halo: halo, haloSize: 1.9, parent: container)
+                }
+                s += 60
+            }
+            let flat = container.flattenedClone()
+            flat.name = "jfkEdgeLights\(g)"
+            nodes.append(flat)
+        }
+
+        // Threshold bars: green at the 31L arrival end (s≈2), red at the far end.
+        func thresholdBar(atStation s: Double, color: UIColor, name: String) {
+            let container = SCNNode()
+            let lens = WorldMat.pbr(worldColor(color.rgbaComponents.r * 0.4,
+                                               color.rgbaComponents.g * 0.4,
+                                               color.rgbaComponents.b * 0.4), roughness: 0.3)
+            bank.register(material: lens, color: color,
+                          onHour: WorldDetailsBuilder.edgeLightsOnHour, night: 5.0)
+            let halo = haloMaterial(color: color)
+            bank.register(material: halo, color: color,
+                          onHour: WorldDetailsBuilder.edgeLightsOnHour, night: 2.6)
+            let half = airport.runway.width / 2
+            for k in 0...12 {
+                let p = -half + Double(k) / 12.0 * half * 2
+                lamp(worldAt: frame.point(s: s, p: p), stake: stake, lens: lens, halo: halo,
+                     haloSize: 2.0, parent: container)
+            }
+            let flat = container.flattenedClone()
+            flat.name = name
+            nodes.append(flat)
+        }
+        thresholdBar(atStation: 2, color: worldColor(0.15, 1.0, 0.35), name: "thr31L")
+        thresholdBar(atStation: length - 2, color: worldColor(1.0, 0.16, 0.16), name: "thr13R")
+        return nodes
+    }
+
+    // MARK: - Taxiway blue edge lights (along the parallel + the ramp connectors)
+
+    private static func taxiwayLightNode(airport: AirportLayout, frame: FieldFrame,
+                                         bank: AirfieldLightBank) -> SCNNode {
+        let container = SCNNode()
+        let stake = WorldMat.pbr(worldColor(0.30, 0.31, 0.33), roughness: 0.7, metalness: 0.3)
+        let lens = WorldMat.pbr(worldColor(0.30, 0.36, 0.52), roughness: 0.3)
+        bank.register(material: lens, color: worldColor(0.24, 0.44, 1.0),
+                      onHour: WorldDetailsBuilder.edgeLightsOnHour, night: 5.5)
+        let halo = haloMaterial(color: worldColor(0.30, 0.50, 1.0))
+        bank.register(material: halo, color: worldColor(0.30, 0.50, 1.0),
+                      onHour: WorldDetailsBuilder.edgeLightsOnHour, night: 2.4)
+
+        // Parallel taxiway "Papa" runs at p = 120 (edges ±15). Blue lamps both
+        // sides down its length.
+        let parP = 120.0, halfW = 15.0
+        var s = 130.0
+        while s < airport.runway.length - 100 {
+            for side in [-1.0, 1.0] {
+                lamp(worldAt: frame.point(s: s, p: parP + side * halfW),
+                     stake: stake, lens: lens, halo: halo, haloSize: 1.6, height: 0.36,
+                     parent: container)
+            }
+            s += 55
+        }
+        // Ramp-mouth connectors toward the apron (a couple of short blue rows).
+        for connS in [500.0, 1800.0, 3200.0] {
+            var p = parP + halfW
+            while p < apronP0 {
+                for side in [-1.0, 1.0] {
+                    lamp(worldAt: frame.point(s: connS + side * halfW, p: p),
+                         stake: stake, lens: lens, halo: halo, haloSize: 1.5, height: 0.36,
+                         parent: container)
+                }
+                p += 30
+            }
+        }
+        let flat = container.flattenedClone()
+        flat.name = "taxiwayLights"
+        return flat
+    }
+
+    // MARK: - Windsock (lit, on the terminal side near the apron)
+
+    private static func windsockNode(airport: AirportLayout, frame: FieldFrame,
+                                     bank: AirfieldLightBank) -> SCNNode {
+        let base = SCNNode()
+        base.name = "jfkWindsock"
+        let pos = airport.windsockPosition
+        base.position = worldV3(pos, airport.groundHeight(at: pos))
+
+        let poleMat = WorldMat.whitePaintMetal
+        let pole = SCNNode(geometry: SCNCylinder(radius: 0.09, height: 6.0))
+        pole.geometry?.materials = [poleMat]
+        pole.position = SCNVector3(0, 3.0, 0)
+        base.addChildNode(pole)
+
+        // Lit ring under the sock — a dusk beacon.
+        let ringMat = SCNMaterial()
+        ringMat.lightingModel = .constant
+        ringMat.diffuse.contents = worldColor(0.2, 0.16, 0.1)
+        bank.register(material: ringMat, color: worldColor(1.0, 0.82, 0.5),
+                      onHour: WorldDetailsBuilder.apronFloodOnHour, night: 3.5)
+        let ring = SCNNode(geometry: SCNTorus(ringRadius: 0.24, pipeRadius: 0.05))
+        ring.geometry?.materials = [ringMat]
+        ring.position = SCNVector3(0, 5.7, 0)
+        base.addChildNode(ring)
+
+        // Sock: yaw to the WSW golden-hour breeze, drooped, wobbling.
+        let yaw = SCNNode()
+        yaw.position = SCNVector3(0, 6.0, 0)
+        yaw.eulerAngles.y = Float(-degToRad(70))
+        base.addChildNode(yaw)
+        let droop = SCNNode()
+        droop.eulerAngles.x = -0.44
+        yaw.addChildNode(droop)
+
+        let sockMat = SCNMaterial()
+        sockMat.lightingModel = .physicallyBased
+        sockMat.diffuse.contents = WorldTex.windsock()
+        sockMat.roughness.contents = 0.9
+        sockMat.isDoubleSided = true
+        sockMat.emission.contents = UIColor(red: 0.55, green: 0.22, blue: 0.05, alpha: 1)
+        let cone = SCNCone(topRadius: 0.18, bottomRadius: 0.55, height: 3.2)
+        cone.materials = [sockMat]
+        let sock = SCNNode(geometry: cone)
+        sock.eulerAngles.x = -.pi / 2
+        sock.position = SCNVector3(0, 0, -1.6)
+        droop.addChildNode(sock)
+
+        let droopWobble = SCNAction.repeatForever(.sequence([
+            .rotateTo(x: -0.36, y: 0, z: 0, duration: 1.7, usesShortestUnitArc: true),
+            .rotateTo(x: -0.52, y: 0, z: 0, duration: 2.3, usesShortestUnitArc: true),
+            .rotateTo(x: -0.42, y: 0, z: 0, duration: 1.5, usesShortestUnitArc: true),
+        ]))
+        droopWobble.timingMode = .easeInEaseOut
+        droop.runAction(droopWobble)
+        let yawBase = -degToRad(70)
+        let yawWobble = SCNAction.repeatForever(.sequence([
+            .rotateTo(x: 0, y: CGFloat(yawBase + 0.10), z: 0, duration: 2.6, usesShortestUnitArc: true),
+            .rotateTo(x: 0, y: CGFloat(yawBase - 0.08), z: 0, duration: 3.1, usesShortestUnitArc: true),
+        ]))
+        yawWobble.timingMode = .easeInEaseOut
+        yaw.runAction(yawWobble)
+        return base
+    }
+
+    // MARK: - Apron flood (a real spot pool washing the gate line at dusk)
+
+    private static func apronFloodNode(airport: AirportLayout, frame: FieldFrame,
+                                       bank: AirfieldLightBank) -> SCNNode {
+        let container = SCNNode()
+        container.name = "jfkApronFlood"
+        let poleBase = frame.point(s: (apronS0 + apronS1) / 2, p: apronP1 - 8)
+        let pole = SCNNode(geometry: SCNCylinder(radius: 0.12, height: 24))
+        pole.geometry?.materials = [WorldMat.whitePaintMetal]
+        pole.position = worldV3(poleBase, 12)
+        container.addChildNode(pole)
+
+        let spot = SCNLight()
+        spot.type = .spot
+        spot.color = worldColor(1.0, 0.82, 0.55)
+        spot.spotInnerAngle = 34
+        spot.spotOuterAngle = 88
+        spot.attenuationStartDistance = 20
+        spot.attenuationEndDistance = 220
+        spot.castsShadow = false
+        bank.register(light: spot, onHour: WorldDetailsBuilder.apronFloodOnHour,
+                      ramp: 0.008, night: 1400)
+        let lightNode = SCNNode()
+        lightNode.light = spot
+        lightNode.position = worldV3(poleBase, 23.5)
+        let aim = frame.point(s: (apronS0 + apronS1) / 2, p: gateLineP)
+        lightNode.look(at: worldV3(aim, airport.groundHeight(at: aim)))
+        container.addChildNode(lightNode)
+        return container
+    }
+}
+
+private extension UIColor {
+    /// RGBA components (0…1); used to derive a dim daytime lens tint from a lit
+    /// colour. Falls back to mid-grey for non-RGBA colour spaces.
+    var rgbaComponents: (r: Double, g: Double, b: Double, a: Double) {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        if getRed(&r, green: &g, blue: &b, alpha: &a) {
+            return (Double(r), Double(g), Double(b), Double(a))
+        }
+        return (0.5, 0.5, 0.5, 1)
     }
 }

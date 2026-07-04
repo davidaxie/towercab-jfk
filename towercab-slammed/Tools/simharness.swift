@@ -130,13 +130,16 @@ func autoPolicy(_ engine: SimEngine, airport: AirportLayout) {
                                              timestamp: engine.simTime))
             } else if let rank = spacingRank[st.id.raw], st.phase == .downwind, !spacedOne {
                 spacedOne = true
+                // At an airliner field the spacing tool is extend-downwind + the
+                // sim's in-trail speed discipline on the leg — NOT a 360 in a busy
+                // pattern (a heavy's full-speed orbit sweeps a huge circle). Only
+                // the leader of a bunch extends; the followers hold in-trail.
                 let legal = engine.legalCommands(for: st)
                 if rank == 1 && legal.contains(.extendDownwind) {
                     engine.apply(CommandEnvelope(aircraft: st.id, command: .extendDownwind,
                                                  timestamp: engine.simTime))
-                } else if legal.contains(.make360(left: false)) {
-                    engine.apply(CommandEnvelope(aircraft: st.id,
-                                                 command: .make360(left: false),
+                } else if !st.clearedToLand {
+                    engine.apply(CommandEnvelope(aircraft: st.id, command: .clearedToLand,
                                                  timestamp: engine.simTime))
                 }
             } else if !st.clearedToLand {
@@ -152,8 +155,20 @@ func autoPolicy(_ engine: SimEngine, airport: AirportLayout) {
             engine.apply(CommandEnvelope(aircraft: st.id, command: .handoff,
                                          timestamp: engine.simTime))
         case .holdingShort:
-            if !clearedOneTakeoff && !busy && (ta ?? .infinity) > 60 {
+            // Slot a departure into every usable gap. A big-jet takeoff roll on
+            // the long runway needs a real window, so clear when the runway is
+            // free and the nearest arrival is comfortably out (or none inbound).
+            // Keeping the queue flowing is what makes a busy single-runway field
+            // like KJFK actually clear its departures.
+            if !clearedOneTakeoff && !busy && (ta ?? .infinity) > 45 {
                 clearedOneTakeoff = true
+                engine.apply(CommandEnvelope(aircraft: st.id,
+                                             command: .clearedForTakeoff(immediate: false),
+                                             timestamp: engine.simTime))
+            }
+        case .lineUpWait:
+            // Once lined up, launch as soon as the arrival gap is workable.
+            if !busy && (ta ?? .infinity) > 40 {
                 engine.apply(CommandEnvelope(aircraft: st.id,
                                              command: .clearedForTakeoff(immediate: false),
                                              timestamp: engine.simTime))
@@ -241,9 +256,9 @@ func sampleTelemetry(_ snap: SimSnapshot, airport: AirportLayout, into r: inout 
     }
 }
 
-func runShift(seed: UInt64, policy: ((SimEngine) -> Void)?, maxTime: Double = 560,
+func runShift(seed: UInt64, policy: ((SimEngine) -> Void)?, maxTime: Double = 660,
               telemetry: Bool = false) -> RunResult {
-    let airport = AirportLayout.kavx
+    let airport = AirportLayout.kjfk
     let engine = SimEngine(airport: airport, seed: seed)
     var result = RunResult()
     while engine.simTime < maxTime {
@@ -275,7 +290,7 @@ func runShift(seed: UInt64, policy: ((SimEngine) -> Void)?, maxTime: Double = 56
 // MARK: - Scenario A: auto-controller
 
 func scenarioAuto() -> Bool {
-    let airport = AirportLayout.kavx
+    let airport = AirportLayout.kjfk
     let result = runShift(seed: kSeed, policy: { autoPolicy($0, airport: airport) })
     var ok = true
     if result.movements < 8 { print("  FAIL: movements \(result.movements) < 8"); ok = false }
@@ -299,7 +314,7 @@ func scenarioAuto() -> Bool {
 // MARK: - Scenario B: determinism
 
 func scenarioDeterminism() -> Bool {
-    let airport = AirportLayout.kavx
+    let airport = AirportLayout.kjfk
     let a = runShift(seed: kSeed, policy: { autoPolicy($0, airport: airport) })
     let b = runShift(seed: kSeed, policy: { autoPolicy($0, airport: airport) })
     var ok = true
@@ -318,7 +333,7 @@ func scenarioDeterminism() -> Bool {
 // MARK: - Scenario C: neglect
 
 func scenarioNeglect() -> Bool {
-    let result = runShift(seed: kSeed, policy: nil, maxTime: 600)
+    let result = runShift(seed: kSeed, policy: nil, maxTime: 700)
     var ok = true
     if result.pilotGoAroundCalls == 0 && result.selfPreservations == 0 {
         print("  FAIL: no pilot go-arounds under total neglect"); ok = false
@@ -388,7 +403,7 @@ func scenarioSave() -> Bool {
     }
 
     // Integration: the auto-controller shift actually flows badges to the report.
-    let airport = AirportLayout.kavx
+    let airport = AirportLayout.kjfk
     let run = runShift(seed: kSeed, policy: { autoPolicy($0, airport: airport) })
     if (run.report?.badges.isEmpty ?? true) {
         print("  FAIL: a full shift earned zero badges (badge pipeline broken)"); ok = false
@@ -404,7 +419,7 @@ func scenarioSave() -> Bool {
 // MARK: - Scenario E: fairness sweep (B1/B2/B4/B7/B9)
 
 func scenarioSeparationSweep() -> Bool {
-    let airport = AirportLayout.kavx
+    let airport = AirportLayout.kjfk
     var worstAir = Double.infinity
     var worstGround = Double.infinity
     var worstDownwind = Double.infinity
@@ -414,7 +429,7 @@ func scenarioSeparationSweep() -> Bool {
     for i in 0..<seeds {
         let seed = 0x7A11_0000 ^ UInt64(i) &* 0x9E3779B1
         let r = runShift(seed: seed, policy: { autoPolicy($0, airport: airport) },
-                         maxTime: 560, telemetry: true)
+                         maxTime: 660, telemetry: true)
         worstAir = min(worstAir, r.minAirborneSep)
         worstGround = min(worstGround, r.minGroundSep)
         worstDownwind = min(worstDownwind, r.minDownwindAltRatio)

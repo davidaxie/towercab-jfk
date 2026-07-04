@@ -40,7 +40,7 @@ import UIKit
 
 /// One nacelle's spinning solid prop (spinner cone + blades), built about its
 /// OWN local origin so it spins in place. Returned separately from the disc.
-private func turbopropSpinner(bladeCount: Int, bladeLength: CGFloat,
+func turbopropSpinner(bladeCount: Int, bladeLength: CGFloat,
                               spinnerScale: Float) -> SCNNode {
     let solid = SCNNode()
     let spinnerMat = pbrMaterial(UIColor(white: 0.16, alpha: 1), roughness: 0.35, metalness: 0.5)
@@ -64,7 +64,7 @@ private func turbopropSpinner(bladeCount: Int, bladeLength: CGFloat,
 
 /// One nacelle's forward blur disc — a radially symmetric additive-free plane,
 /// identical read to makePropGroup's disc. Needs no spin (symmetric).
-private func propDiscNode(discDiameter: CGFloat) -> SCNNode {
+func propDiscNode(discDiameter: CGFloat) -> SCNNode {
     let plane = SCNPlane(width: discDiameter, height: discDiameter)
     let dm = SCNMaterial()
     dm.lightingModel = .constant
@@ -88,7 +88,7 @@ private func propDiscNode(discDiameter: CGFloat) -> SCNNode {
 ///   • blurDisc  — parent of both discs; opacity fades the blur discs in.
 ///   • installOn — adds the spinners + discs onto the body at their hubs and
 ///                 starts each spinner's in-place rotation.
-private func twinPropLive(hubs: [SCNVector3], bladeCount: Int, bladeLength: CGFloat,
+func twinPropLive(hubs: [SCNVector3], bladeCount: Int, bladeLength: CGFloat,
                           spinnerScale: Float, discDiameter: CGFloat)
     -> (spinNode: SCNNode, blades: SCNNode, blurDisc: SCNNode, install: (SCNNode) -> Void) {
     let spinNode = SCNNode()                 // harmless spin sink for update()

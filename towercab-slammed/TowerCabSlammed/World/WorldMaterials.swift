@@ -474,6 +474,240 @@ enum WorldTex {
         }
     }
 
+    // MARK: - KJFK box runways (the other three: 13L/31R, 04L/22R, 04R/22L)
+
+    /// Full-length JFK runway texture for the three *inactive* box runways.
+    /// v=0 = threshold B (the `nameB` end), v=1 = threshold A (the `nameA` end).
+    /// PALE, clean, wide grooved CONCRETE — greyer/cooler and less warm-bleached
+    /// than the active Bay Runway, matching a big international field. Marked to
+    /// spec: threshold "piano keys", full-length side stripes, aiming points, a
+    /// long dashed centerline, FAA-stencil designators ("31L"/"13R" etc.), rubber
+    /// touchdown pads, and yellow chevron blast pads just off each threshold.
+    /// `blastB`/`blastA` request a chevron blast pad off that end (the two 13/31
+    /// runways get displaced/paved overrun ends at JFK).
+    static func jfkRunway(lengthMeters: Double, widthMeters: Double,
+                          nameB: String, nameA: String, seed: UInt64,
+                          blastB: Bool = true, blastA: Bool = true) -> UIImage {
+        // Long-axis realism: ~9 px/m along, ~14 px/m across (60 m wide runways).
+        let W: CGFloat = 1024
+        let H: CGFloat = min(8192, CGFloat((lengthMeters * 9).rounded()))
+        let ppmX = W / CGFloat(widthMeters)
+        let ppmY = H / CGFloat(lengthMeters)
+        let halfW = widthMeters / 2
+        func X(_ m: Double) -> CGFloat { W / 2 + CGFloat(m) * ppmX }
+        func Y(_ s: Double) -> CGFloat { CGFloat(s) * ppmY }
+        func fillM(_ ctx: CGContext, sFrom: Double, sTo: Double, xFrom: Double, xTo: Double) {
+            ctx.fill(CGRect(x: X(min(xFrom, xTo)), y: Y(min(sFrom, sTo)),
+                            width: CGFloat(abs(xTo - xFrom)) * ppmX,
+                            height: CGFloat(abs(sTo - sFrom)) * ppmY))
+        }
+        return image(CGSize(width: W, height: H)) { ctx, size in
+            // Pale grey-neutral concrete base — cleaner and cooler than the Bay
+            // Runway's warm concrete (big-airport look).
+            ctx.setFillColor(worldColor(0.640, 0.640, 0.632).cgColor)
+            ctx.fill(CGRect(origin: .zero, size: size))
+
+            // Per-slab tone (slabs ≈ 7.6 m along × 4 lanes across).
+            var rng = WorldRand(seed: seed)
+            let slabAlong = 7.62, lanes = 4
+            var s = 0.0
+            while s < lengthMeters {
+                for lane in 0..<lanes {
+                    let x0 = CGFloat(lane) / CGFloat(lanes) * W
+                    let tone = rng.range(-0.035, 0.035)
+                    let c = tone >= 0 ? worldColor(1, 1, 1, tone)
+                                      : worldColor(0.10, 0.11, 0.13, -tone)
+                    ctx.setFillColor(c.cgColor)
+                    ctx.fill(CGRect(x: x0, y: Y(s), width: W / CGFloat(lanes),
+                                    height: CGFloat(slabAlong) * ppmY + 1))
+                }
+                s += slabAlong
+            }
+            // Fine aggregate noise + faint bleach.
+            speckle(ctx, size: size, count: 5200, seed: seed &+ 1, radius: 0.6...2.2,
+                    colors: [(worldColor(0.74, 0.74, 0.73), 0.08),
+                             (worldColor(0.50, 0.50, 0.50), 0.07),
+                             (worldColor(0.60, 0.60, 0.59), 0.05)])
+            speckle(ctx, size: size, count: 90, seed: seed &+ 2, radius: 40...180,
+                    colors: [(worldColor(0.70, 0.70, 0.69), 0.05),
+                             (worldColor(0.56, 0.56, 0.56), 0.045)])
+            // Bleached outer thirds.
+            for side in [-1.0, 1.0] {
+                let inner = halfW * 0.36
+                let colors = [worldColor(0.70, 0.70, 0.69, 0.30).cgColor,
+                              worldColor(0.70, 0.70, 0.69, 0.0).cgColor] as CFArray
+                if let g = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                      colors: colors, locations: [0, 1]) {
+                    ctx.saveGState()
+                    ctx.clip(to: CGRect(x: side < 0 ? 0 : X(inner), y: 0,
+                                        width: side < 0 ? X(-inner) : W - X(inner), height: H))
+                    ctx.drawLinearGradient(g, start: CGPoint(x: X(side * halfW), y: 0),
+                                           end: CGPoint(x: X(side * inner), y: 0), options: [])
+                    ctx.restoreGState()
+                }
+            }
+
+            // Transverse groove hint + saw-cut joint grid.
+            ctx.setStrokeColor(worldColor(0.44, 0.44, 0.435, 0.55).cgColor)
+            ctx.setLineWidth(2.2)
+            s = 0
+            while s <= lengthMeters { ctx.move(to: CGPoint(x: 0, y: Y(s)))
+                                      ctx.addLine(to: CGPoint(x: W, y: Y(s))); s += slabAlong }
+            for lane in 0...lanes {
+                let x = CGFloat(lane) / CGFloat(lanes) * W
+                ctx.move(to: CGPoint(x: x, y: 0)); ctx.addLine(to: CGPoint(x: x, y: H))
+            }
+            ctx.strokePath()
+            // A few hairline cracks.
+            ctx.setLineWidth(1.0)
+            for _ in 0..<10 {
+                ctx.setStrokeColor(worldColor(0.42, 0.42, 0.41, rng.range(0.12, 0.22)).cgColor)
+                var p = CGPoint(x: rng.cgRange(30, W - 30), y: rng.cgRange(0, H))
+                ctx.move(to: p)
+                for _ in 0..<rng.int(4) + 2 { p.x += rng.cgRange(-18, 18); p.y += rng.cgRange(14, 70)
+                                              ctx.addLine(to: p) }
+                ctx.strokePath()
+            }
+
+            // Rubber touchdown pads a little in from each landing threshold.
+            func rubberPad(centeredAt tc: Double, seed rs: UInt64) {
+                var r = WorldRand(seed: rs)
+                for _ in 0..<420 {
+                    let st = tc + r.range(-150, 150)
+                    if st < 40 || st > lengthMeters - 40 { continue }
+                    let fall = worldSmoothstep(160, 0, abs(st - tc))
+                    let sign: Double = r.unit() > 0.5 ? 1 : -1
+                    let lateral = sign * (2.0 + abs(r.range(-1, 1)) * (halfW * 0.42))
+                    if abs(lateral) < 0.9 { continue }
+                    let w = r.cgRange(10, 30), h = r.cgRange(26, 96)
+                    let a = (0.09 + 0.11 * fall) * r.range(0.5, 1.0)
+                    ctx.setFillColor(worldColor(0.16, 0.16, 0.18, a).cgColor)
+                    ctx.fillEllipse(in: CGRect(x: X(lateral) - w / 2, y: Y(st) - h / 2, width: w, height: h))
+                }
+            }
+            rubberPad(centeredAt: 320, seed: seed &+ 3)
+            rubberPad(centeredAt: lengthMeters - 320, seed: seed &+ 4)
+
+            // ---- Paint ----
+            let paint = worldColor(0.95, 0.95, 0.93, 0.94)
+            ctx.setFillColor(paint.cgColor)
+
+            // Full-length side stripes (0.9 m wide, inset 1.5 m — 60 m runway).
+            let sideInset = 1.5, sideWide = 0.9
+            for side in [-1.0, 1.0] {
+                let outer = side * (halfW - sideInset)
+                fillM(ctx, sFrom: 6, sTo: lengthMeters - 6,
+                      xFrom: outer, xTo: outer - side * sideWide)
+            }
+
+            // Threshold piano keys — bars scaled to the wide runway (8 bars,
+            // 1.75 m wide × 30 m, symmetric about the centre).
+            func pianoKeys(fromStation s0: Double, dir: Double) {
+                let barLen = 30.0, barWide = 1.75, gap = 1.9
+                let start = s0 + dir * 6.0
+                for k in 0..<4 {
+                    let x = 1.8 + Double(k) * (barWide + gap)
+                    for sgn in [-1.0, 1.0] {
+                        let xo = sgn * x
+                        fillM(ctx, sFrom: start, sTo: start + dir * barLen,
+                              xFrom: xo, xTo: xo + (sgn < 0 ? -barWide : barWide))
+                    }
+                }
+            }
+            pianoKeys(fromStation: 0, dir: 1)
+            pianoKeys(fromStation: lengthMeters, dir: -1)
+
+            // Aiming-point pair — solid bars 6 m wide × 45 m, ±11 m off centre,
+            // ~400 m in from each threshold (big-runway TDZ scale).
+            func aimingPoint(centre: Double) {
+                let barLen = 45.0, barWide = 6.0, off = 11.0
+                for sgn in [-1.0, 1.0] {
+                    let xo = sgn * off
+                    fillM(ctx, sFrom: centre - barLen / 2, sTo: centre + barLen / 2,
+                          xFrom: xo, xTo: xo + (sgn < 0 ? -barWide : barWide))
+                }
+            }
+            aimingPoint(centre: 400)
+            aimingPoint(centre: lengthMeters - 400)
+
+            // Centerline dashes (36.6 m dash / 24.4 m gap, 0.9 m wide).
+            var cs = 90.0
+            while cs + 36.6 < lengthMeters - 90 {
+                fillM(ctx, sFrom: cs, sTo: cs + 36.6, xFrom: -0.45, xTo: 0.45)
+                cs += 61.0
+            }
+
+            // FAA-stencil designators. `nameB` reads to a pilot landing toward A
+            // (rotated 180°, at the B end); `nameA` reads upright at the A end.
+            faaNumeral(nameB, ctx: ctx, center: CGPoint(x: W / 2, y: Y(70)),
+                       ppmX: ppmX, ppmY: ppmY, rotated: true, color: paint)
+            faaNumeral(nameA, ctx: ctx, center: CGPoint(x: W / 2, y: Y(lengthMeters - 70)),
+                       ppmX: ppmX, ppmY: ppmY, rotated: false, color: paint)
+
+            // Yellow chevron blast pads just off each requested threshold.
+            func blastPad(fromStation s0: Double, dir: Double) {
+                let padLen = 60.0, rows = 5
+                ctx.setStrokeColor(worldColor(0.86, 0.70, 0.14, 0.9).cgColor)
+                ctx.setLineWidth(0.9 * ppmX)
+                ctx.setLineCap(.round)
+                for k in 0..<rows {
+                    let sc = s0 + dir * (6 + Double(k) * (padLen / Double(rows)))
+                    // Chevron points toward the runway (apex at centre).
+                    let apexS = sc, wingS = sc - dir * 9.0
+                    ctx.move(to: CGPoint(x: X(-halfW + 3.5), y: Y(wingS)))
+                    ctx.addLine(to: CGPoint(x: X(0), y: Y(apexS)))
+                    ctx.addLine(to: CGPoint(x: X(halfW - 3.5), y: Y(wingS)))
+                    ctx.strokePath()
+                }
+            }
+            if blastB { blastPad(fromStation: 0, dir: -1) }
+            if blastA { blastPad(fromStation: lengthMeters, dir: 1) }
+
+            // Subtle weathering over everything.
+            speckle(ctx, size: size, count: 460, seed: seed &+ 5, radius: 2...8,
+                    colors: [(worldColor(0.54, 0.54, 0.53), 0.07)])
+        }
+    }
+
+    /// Tileable pale grooved CONCRETE for JFK taxiways/exits/connectors — cleaner
+    /// and greyer than the Catalina taxiAsphalt, with visible transverse grooves.
+    static func jfkTaxiConcrete() -> UIImage {
+        image(CGSize(width: 512, height: 512)) { ctx, size in
+            ctx.setFillColor(worldColor(0.560, 0.560, 0.550).cgColor)
+            ctx.fill(CGRect(origin: .zero, size: size))
+            speckle(ctx, size: size, count: 1400, seed: 0x5EC0, radius: 0.7...3.0,
+                    colors: [(worldColor(0.66, 0.66, 0.65), 0.10),
+                             (worldColor(0.42, 0.42, 0.42), 0.10),
+                             (worldColor(0.58, 0.57, 0.55), 0.05)], wrap: true)
+            speckle(ctx, size: size, count: 24, seed: 0x5EC1, radius: 20...70,
+                    colors: [(worldColor(0.50, 0.50, 0.49), 0.08),
+                             (worldColor(0.62, 0.62, 0.61), 0.07)], wrap: true)
+            // Transverse saw-cut grooves (every ~6 px) — grooved-concrete read.
+            ctx.setStrokeColor(worldColor(0.46, 0.46, 0.45, 0.28).cgColor)
+            ctx.setLineWidth(1.4)
+            var y: CGFloat = 4
+            while y < size.height { ctx.move(to: CGPoint(x: 0, y: y))
+                                    ctx.addLine(to: CGPoint(x: size.width, y: y)); y += 12 }
+            ctx.strokePath()
+            // Slab expansion joints wandering through.
+            var rng = WorldRand(seed: 0x5EC3)
+            ctx.setLineWidth(2.6)
+            for _ in 0..<4 {
+                ctx.setStrokeColor(worldColor(0.40, 0.40, 0.39, rng.range(0.25, 0.42)).cgColor)
+                let vertical = rng.unit() > 0.5
+                var p = vertical ? CGPoint(x: rng.cgRange(0, size.width), y: 0)
+                                 : CGPoint(x: 0, y: rng.cgRange(0, size.height))
+                ctx.move(to: p)
+                while (vertical ? p.y : p.x) < size.width {
+                    if vertical { p.y += 64; p.x += rng.cgRange(-4, 4) }
+                    else { p.x += 64; p.y += rng.cgRange(-4, 4) }
+                    ctx.addLine(to: p)
+                }
+                ctx.strokePath()
+            }
+        }
+    }
+
     /// FAA runway-designation numerals rendered as filled glyphs matching the
     /// rounded stencil character set: uniform thick stroke (~2.9 m) with rounded
     /// terminals, 18 m tall. Each digit is a set of capsule strokes + arc bowls
@@ -563,6 +797,17 @@ enum WorldTex {
                 arc(midx, t + br, br, 0, 2 * .pi)                // top loop
                 capsule(r, t + br, r, b - br * 0.6)              // right stem down
                 arc(midx, b - br * 0.6, br, 0.6, .pi)           // bottom curl
+            case "L":
+                // FAA position letter — full-height left stem + base bar.
+                capsule(l, t, l, b)                              // left stem
+                capsule(l, b, r, b)                              // base bar
+            case "R":
+                // FAA position letter — stem, top bowl, and a straight leg.
+                capsule(l, t, l, b)                              // left stem
+                capsule(l, t, midx + br * 0.35, t)              // top into bowl
+                arc(midx + br * 0.1, t + br * 0.9, br * 0.9, -.pi / 2, .pi / 2) // bowl
+                capsule(l, midy + br * 0.1, r, midy + br * 0.1) // waist
+                capsule(midx + br * 0.05, midy + br * 0.1, r, b) // diagonal leg
             default:
                 break
             }
@@ -1359,6 +1604,30 @@ enum WorldMat {
         return m
     }()
     static let taxiAsphalt: SCNMaterial = pbr(WorldTex.taxiAsphalt(), roughness: 0.88, wrap: true)
+    /// Pale grooved CONCRETE for the JFK box taxiways/exits — greyer and cleaner
+    /// than Catalina asphalt, with the shared concrete normal + roughness detail
+    /// maps so saw-cut grooves catch a golden-hour micro-highlight. Anisotropic
+    /// so the wide pavement stays crisp at grazing cab angles.
+    static let jfkTaxiConcrete: SCNMaterial = {
+        let m = pbr(WorldTex.jfkTaxiConcrete(), roughness: 0.7, wrap: true)
+        m.diffuse.maxAnisotropy = 16
+        if let nrm = WorldTex.concreteNormal() {
+            m.normal.contents = nrm
+            m.normal.wrapS = .repeat
+            m.normal.wrapT = .repeat
+            m.normal.contentsTransform = SCNMatrix4MakeScale(6, 6, 1)
+            m.normal.mipFilter = .linear
+            m.normal.maxAnisotropy = 16
+            m.normal.intensity = 0.30
+        }
+        m.roughness.contents = WorldTex.concreteRoughness()
+        m.roughness.wrapS = .repeat
+        m.roughness.wrapT = .repeat
+        m.roughness.contentsTransform = SCNMatrix4MakeScale(6, 6, 1)
+        m.roughness.mipFilter = .linear
+        m.roughness.maxAnisotropy = 16
+        return m
+    }()
     /// Service-road dirt — feathered alpha edges (D19).
     static let dirt: SCNMaterial = {
         let m = pbr(WorldTex.dirt(), roughness: 0.97, wrap: true)

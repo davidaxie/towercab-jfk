@@ -1,7 +1,7 @@
 import Foundation
 
 // =============================================================================
-// AircraftCatalog — the data-driven spec table backing all 16 real aircraft
+// AircraftCatalog — the data-driven spec table backing all 30 real aircraft
 // types. AircraftKind (SimTypes.swift) is a thin enum; every per-type property
 // (speeds, geometry, rarity, capability class) reads out of `spec` here so the
 // fleet lives in ONE source of truth.
@@ -41,6 +41,7 @@ public struct AircraftSpec {
     public let engine: EngineType
     public let wingspanM: Double
     public let lengthM: Double
+    public let heightM: Double
     public let approachKt: Double
     public let patternKt: Double
     public let climbKt: Double
@@ -57,13 +58,13 @@ public struct AircraftSpec {
     public var engineIsJet: Bool { engine == .jet }
 
     public init(display: String, fullName: String, sizeClass: SizeClass, engine: EngineType,
-                wingspanM: Double, lengthM: Double, approachKt: Double, patternKt: Double,
+                wingspanM: Double, lengthM: Double, heightM: Double = 0, approachKt: Double, patternKt: Double,
                 climbKt: Double, rotateKt: Double, climbRateMps: Double, rolloutDecel: Double,
                 takeoffAccel: Double, taxiMps: Double, spawnWeight: Double, movementWeight: Double,
                 mtowLb: Double, retractableGear: Bool) {
         self.display = display; self.fullName = fullName
         self.sizeClass = sizeClass; self.engine = engine
-        self.wingspanM = wingspanM; self.lengthM = lengthM
+        self.wingspanM = wingspanM; self.lengthM = lengthM; self.heightM = heightM
         self.approachKt = approachKt; self.patternKt = patternKt
         self.climbKt = climbKt; self.rotateKt = rotateKt
         self.climbRateMps = climbRateMps; self.rolloutDecel = rolloutDecel
@@ -148,33 +149,123 @@ public extension AircraftKind {
         case .e175:
             return AircraftSpec(display: "E175", fullName: "Embraer E175",
                 sizeClass: .regional, engine: .jet,
-                wingspanM: 26.0, lengthM: 31.7, approachKt: 130, patternKt: 180, climbKt: 170,
+                wingspanM: 26.0, lengthM: 31.7, heightM: 9.86, approachKt: 130, patternKt: 180, climbKt: 170,
                 rotateKt: 130, climbRateMps: 12.0, rolloutDecel: 2.6, takeoffAccel: 3.2,
-                taxiMps: 9.0, spawnWeight: 3, movementWeight: 2.0, mtowLb: 89000, retractableGear: true)
+                taxiMps: 9.0, spawnWeight: 6, movementWeight: 2.0, mtowLb: 89000, retractableGear: true)
         case .boeing737:
             return AircraftSpec(display: "B738", fullName: "Boeing 737-800",
                 sizeClass: .narrowbody, engine: .jet,
-                wingspanM: 35.8, lengthM: 39.5, approachKt: 145, patternKt: 210, climbKt: 250,
+                wingspanM: 35.8, lengthM: 39.5, heightM: 12.5, approachKt: 145, patternKt: 210, climbKt: 250,
                 rotateKt: 145, climbRateMps: 12.0, rolloutDecel: 2.4, takeoffAccel: 2.4,
-                taxiMps: 9.0, spawnWeight: 2.5, movementWeight: 3.0, mtowLb: 174000, retractableGear: true)
+                taxiMps: 9.0, spawnWeight: 12, movementWeight: 3.0, mtowLb: 174000, retractableGear: true)
         case .airbus320:
             return AircraftSpec(display: "A320", fullName: "Airbus A320",
                 sizeClass: .narrowbody, engine: .jet,
-                wingspanM: 35.8, lengthM: 37.6, approachKt: 140, patternKt: 210, climbKt: 250,
+                wingspanM: 35.8, lengthM: 37.6, heightM: 11.76, approachKt: 140, patternKt: 210, climbKt: 250,
                 rotateKt: 140, climbRateMps: 12.0, rolloutDecel: 2.4, takeoffAccel: 2.4,
-                taxiMps: 9.0, spawnWeight: 2.5, movementWeight: 3.0, mtowLb: 169000, retractableGear: true)
+                taxiMps: 9.0, spawnWeight: 12, movementWeight: 3.0, mtowLb: 169000, retractableGear: true)
         case .boeing777:
             return AircraftSpec(display: "B77W", fullName: "Boeing 777-300ER",
                 sizeClass: .widebody, engine: .jet,
-                wingspanM: 64.8, lengthM: 73.9, approachKt: 149, patternKt: 220, climbKt: 270,
+                wingspanM: 64.8, lengthM: 73.9, heightM: 18.5, approachKt: 149, patternKt: 220, climbKt: 270,
                 rotateKt: 150, climbRateMps: 12.0, rolloutDecel: 2.2, takeoffAccel: 2.2,
-                taxiMps: 9.0, spawnWeight: 0.8, movementWeight: 4.5, mtowLb: 775000, retractableGear: true)
+                taxiMps: 9.0, spawnWeight: 6, movementWeight: 4.5, mtowLb: 775000, retractableGear: true)
         case .airbus380:
             return AircraftSpec(display: "A388", fullName: "Airbus A380-800",
                 sizeClass: .widebody, engine: .jet,
-                wingspanM: 79.8, lengthM: 72.7, approachKt: 145, patternKt: 220, climbKt: 270,
+                wingspanM: 79.8, lengthM: 72.7, heightM: 24.1, approachKt: 145, patternKt: 220, climbKt: 270,
                 rotateKt: 150, climbRateMps: 11.0, rolloutDecel: 2.0, takeoffAccel: 2.0,
-                taxiMps: 9.0, spawnWeight: 0.3, movementWeight: 6.0, mtowLb: 1268000, retractableGear: true)
+                taxiMps: 9.0, spawnWeight: 1.5, movementWeight: 6.0, mtowLb: 1268000, retractableGear: true)
+
+        // ===== New all-airliner fleet (KJFK) =====
+        // Regional turboprops (sizeClass .regional so they DO spawn at KJFK).
+        case .atr72:
+            return AircraftSpec(display: "AT72", fullName: "ATR 72-600",
+                sizeClass: .regional, engine: .turboprop,
+                wingspanM: 27.05, lengthM: 27.17, heightM: 7.65, approachKt: 113, patternKt: 160, climbKt: 150,
+                rotateKt: 100, climbRateMps: 6.5, rolloutDecel: 2.4, takeoffAccel: 2.8,
+                taxiMps: 9.0, spawnWeight: 3, movementWeight: 2.0, mtowLb: 50265, retractableGear: true)
+        case .dash8:
+            return AircraftSpec(display: "DH8D", fullName: "Bombardier Dash 8 Q400",
+                sizeClass: .regional, engine: .turboprop,
+                wingspanM: 28.4, lengthM: 32.83, heightM: 8.34, approachKt: 120, patternKt: 170, climbKt: 165,
+                rotateKt: 105, climbRateMps: 7.5, rolloutDecel: 2.4, takeoffAccel: 2.9,
+                taxiMps: 9.0, spawnWeight: 3, movementWeight: 2.0, mtowLb: 64500, retractableGear: true)
+        // Regional jets.
+        case .e190:
+            return AircraftSpec(display: "E190", fullName: "Embraer E190",
+                sizeClass: .regional, engine: .jet,
+                wingspanM: 28.72, lengthM: 36.24, heightM: 10.57, approachKt: 135, patternKt: 185, climbKt: 175,
+                rotateKt: 135, climbRateMps: 12.0, rolloutDecel: 2.6, takeoffAccel: 3.2,
+                taxiMps: 9.0, spawnWeight: 5, movementWeight: 2.0, mtowLb: 114199, retractableGear: true)
+        case .crj900:
+            return AircraftSpec(display: "CRJ9", fullName: "Bombardier CRJ900",
+                sizeClass: .regional, engine: .jet,
+                wingspanM: 24.85, lengthM: 36.2, heightM: 7.51, approachKt: 140, patternKt: 185, climbKt: 175,
+                rotateKt: 140, climbRateMps: 12.0, rolloutDecel: 2.6, takeoffAccel: 3.2,
+                taxiMps: 9.0, spawnWeight: 5, movementWeight: 2.0, mtowLb: 84500, retractableGear: true)
+        // Narrowbodies.
+        case .a319:
+            return AircraftSpec(display: "A319", fullName: "Airbus A319",
+                sizeClass: .narrowbody, engine: .jet,
+                wingspanM: 35.8, lengthM: 33.84, heightM: 11.76, approachKt: 138, patternKt: 205, climbKt: 250,
+                rotateKt: 138, climbRateMps: 12.0, rolloutDecel: 2.4, takeoffAccel: 2.5,
+                taxiMps: 9.0, spawnWeight: 6, movementWeight: 3.0, mtowLb: 166449, retractableGear: true)
+        case .a321:
+            return AircraftSpec(display: "A321", fullName: "Airbus A321",
+                sizeClass: .narrowbody, engine: .jet,
+                wingspanM: 35.8, lengthM: 44.51, heightM: 11.76, approachKt: 142, patternKt: 210, climbKt: 250,
+                rotateKt: 145, climbRateMps: 11.5, rolloutDecel: 2.4, takeoffAccel: 2.3,
+                taxiMps: 9.0, spawnWeight: 10, movementWeight: 3.0, mtowLb: 206132, retractableGear: true)
+        case .b757:
+            return AircraftSpec(display: "B752", fullName: "Boeing 757-200",
+                sizeClass: .narrowbody, engine: .jet,
+                wingspanM: 38.05, lengthM: 47.32, heightM: 13.56, approachKt: 135, patternKt: 210, climbKt: 260,
+                rotateKt: 140, climbRateMps: 15.0, rolloutDecel: 2.4, takeoffAccel: 2.7,
+                taxiMps: 9.0, spawnWeight: 4, movementWeight: 3.0, mtowLb: 255000, retractableGear: true)
+        case .md80:
+            return AircraftSpec(display: "MD80", fullName: "McDonnell Douglas MD-80",
+                sizeClass: .narrowbody, engine: .jet,
+                wingspanM: 32.87, lengthM: 45.06, heightM: 9.05, approachKt: 143, patternKt: 205, climbKt: 250,
+                rotateKt: 145, climbRateMps: 11.0, rolloutDecel: 2.3, takeoffAccel: 2.3,
+                taxiMps: 9.0, spawnWeight: 2, movementWeight: 3.0, mtowLb: 149500, retractableGear: true)
+        // Widebodies.
+        case .b767:
+            return AircraftSpec(display: "B763", fullName: "Boeing 767-300ER",
+                sizeClass: .widebody, engine: .jet,
+                wingspanM: 47.57, lengthM: 54.94, heightM: 15.85, approachKt: 145, patternKt: 220, climbKt: 270,
+                rotateKt: 150, climbRateMps: 12.0, rolloutDecel: 2.2, takeoffAccel: 2.3,
+                taxiMps: 9.0, spawnWeight: 3, movementWeight: 4.5, mtowLb: 412000, retractableGear: true)
+        case .b787:
+            return AircraftSpec(display: "B789", fullName: "Boeing 787-9",
+                sizeClass: .widebody, engine: .jet,
+                wingspanM: 60.12, lengthM: 62.81, heightM: 17.02, approachKt: 147, patternKt: 220, climbKt: 270,
+                rotateKt: 150, climbRateMps: 12.0, rolloutDecel: 2.2, takeoffAccel: 2.3,
+                taxiMps: 9.0, spawnWeight: 6, movementWeight: 4.5, mtowLb: 561500, retractableGear: true)
+        case .a330:
+            return AircraftSpec(display: "A333", fullName: "Airbus A330-300",
+                sizeClass: .widebody, engine: .jet,
+                wingspanM: 60.3, lengthM: 63.69, heightM: 16.83, approachKt: 145, patternKt: 220, climbKt: 270,
+                rotateKt: 150, climbRateMps: 12.0, rolloutDecel: 2.2, takeoffAccel: 2.2,
+                taxiMps: 9.0, spawnWeight: 4, movementWeight: 4.5, mtowLb: 533520, retractableGear: true)
+        case .a350:
+            return AircraftSpec(display: "A359", fullName: "Airbus A350-900",
+                sizeClass: .widebody, engine: .jet,
+                wingspanM: 64.75, lengthM: 66.8, heightM: 17.05, approachKt: 145, patternKt: 220, climbKt: 270,
+                rotateKt: 150, climbRateMps: 12.0, rolloutDecel: 2.2, takeoffAccel: 2.2,
+                taxiMps: 9.0, spawnWeight: 5, movementWeight: 4.5, mtowLb: 617295, retractableGear: true)
+        case .b747:
+            return AircraftSpec(display: "B744", fullName: "Boeing 747-400",
+                sizeClass: .widebody, engine: .jet,
+                wingspanM: 64.4, lengthM: 70.6, heightM: 19.4, approachKt: 152, patternKt: 220, climbKt: 270,
+                rotateKt: 155, climbRateMps: 11.0, rolloutDecel: 2.0, takeoffAccel: 2.0,
+                taxiMps: 9.0, spawnWeight: 2, movementWeight: 5.5, mtowLb: 875000, retractableGear: true)
+        case .dc10:
+            return AircraftSpec(display: "DC10", fullName: "McDonnell Douglas DC-10",
+                sizeClass: .widebody, engine: .jet,
+                wingspanM: 50.39, lengthM: 55.35, heightM: 17.55, approachKt: 155, patternKt: 220, climbKt: 270,
+                rotateKt: 160, climbRateMps: 11.0, rolloutDecel: 2.0, takeoffAccel: 2.1,
+                taxiMps: 9.0, spawnWeight: 1, movementWeight: 5.5, mtowLb: 572000, retractableGear: true)
         }
     }
 

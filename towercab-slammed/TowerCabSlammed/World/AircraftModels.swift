@@ -1150,6 +1150,21 @@ final class CraftEntity: AircraftEntity {
         case .airbus320:     parts = buildAirbus320(livery: livery)
         case .boeing777:     parts = buildBoeing777(livery: livery)
         case .airbus380:     parts = buildAirbus380(livery: livery)
+        // --- New airliners (real models) ---
+        case .atr72:   parts = buildATR72(livery: livery)
+        case .dash8:   parts = buildDash8Q400(livery: livery)
+        case .e190:    parts = buildE190(livery: livery)
+        case .crj900:  parts = buildCRJ900(livery: livery)
+        case .a319:    parts = buildA319(livery: livery)
+        case .a321:    parts = buildA321(livery: livery)
+        case .b757:    parts = buildB757(livery: livery)
+        case .md80:    parts = buildMD80(livery: livery)
+        case .b767:    parts = buildB767(livery: livery)
+        case .b787:    parts = buildB787(livery: livery)
+        case .a330:    parts = buildA330(livery: livery)
+        case .a350:    parts = buildA350(livery: livery)
+        case .b747:    parts = buildB747(livery: livery)
+        case .dc10:    parts = buildDC10(livery: livery)
         }
         node.addChildNode(parts.body)
         CraftEntity.instanceCounter += 1
