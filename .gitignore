@@ -21,3 +21,7 @@ towercab-slammed/build/
 towercab-slammed/DerivedData/
 towercab-slammed/*.xcodeproj/xcuserdata/
 towercab-slammed/*.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Private strategy — kept local, never published (PRD, market research, agent context)
+/docs/
+/CLAUDE.md
