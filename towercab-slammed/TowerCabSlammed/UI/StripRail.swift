@@ -112,7 +112,9 @@ private struct StripCard: View {
         }
         .scaleEffect(strip.isSelected ? 1.04 : 1.0)
         .offset(x: dragX)
-        .opacity(1.0 - Double(dragX) / 420.0)
+        // Clamped: a long flick past 420 pt would otherwise drive opacity
+        // negative (SwiftUI clamps it, but the intent should be in the code).
+        .opacity(max(0, min(1, 1.0 - Double(dragX) / 420.0)))
         .animation(Theme.springFast, value: strip.isSelected)
         // C22 — the drag recognizer only exists on complete strips; everywhere
         // else the rail is a pure tap zone (no dead pan capture).

@@ -169,8 +169,7 @@ private func buildWidebody(_ spec: WidebodySpec, livery: Livery) -> CraftParts {
         let nacMat = pbrMaterial(pal.body, roughness: max(0.12, pal.roughness - 0.06),
                                  metalness: min(1, pal.metalness + 0.15))
         let intakeMat = pbrMaterial(UIColor(white: 0.05, alpha: 1), roughness: 0.4)
-        let tireMat = pbrMaterial(UIColor(white: 0.08, alpha: 1), roughness: 0.9)
-        let hubMat = pbrMaterial(UIColor(white: 0.7, alpha: 1), roughness: 0.4, metalness: 0.6)
+        // (wheel materials belong to the LIVE parts below, not the cached shell)
 
         // --- Fuselage tube (cabin windows are baked into the texture) ---------
         let fus = latheNode(spec.fuselage, segments: spec.fuseSegments,

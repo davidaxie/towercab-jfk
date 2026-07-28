@@ -23,16 +23,30 @@ final class PlaythroughUITests: XCTestCase {
         attach(app, "01-after-start")
 
         // 2. A strip appears on the rail within the first spawn window.
-        let strip = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier BEGINSWITH 'strip-'")).firstMatch
-        XCTAssertTrue(strip.waitForExistence(timeout: 40), "first strip should appear")
+        let strips = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH 'strip-'"))
+        XCTAssertTrue(strips.firstMatch.waitForExistence(timeout: 40),
+                      "first strip should appear")
 
-        // 3. Tap the strip → radial bloom opens with at least one verb.
-        strip.tap()
+        // 3. Tap strips until one blooms. The shift seed is random per cold
+        //    start, so the first strip may legitimately be a departure still
+        //    STARTING UP — which has nothing the tower can say to it yet, and
+        //    now frames the camera instead of opening an empty ring. A player
+        //    does exactly this: taps down the rail until something is workable.
         let verb = app.buttons
             .matching(NSPredicate(format: "identifier BEGINSWITH 'verb-'")).firstMatch
-        XCTAssertTrue(verb.waitForExistence(timeout: 6),
-                      "tapping a strip should open the verb bloom")
+        var opened = false
+        for attempt in 0..<8 where !opened {
+            let count = strips.count
+            guard count > 0 else { break }
+            strips.element(boundBy: attempt % count).tap()
+            opened = verb.waitForExistence(timeout: 3)
+            if !opened {
+                // Dismiss any framing/selection before trying the next strip.
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.22)).tap()
+            }
+        }
+        XCTAssertTrue(opened, "tapping a workable strip should open the verb bloom")
         attach(app, "02-bloom-open")
 
         // 4. Fire the verb — bloom should dismiss (command accepted).

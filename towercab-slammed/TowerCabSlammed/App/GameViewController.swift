@@ -102,7 +102,12 @@ final class GameViewController: UIViewController {
         }
         audio.setEnabled(settings.soundEnabled)
 
-        let link = CADisplayLink(target: self, selector: #selector(step(_:)))
+        // CADisplayLink retains its target and the run loop retains the link, so
+        // targeting `self` directly makes the view controller immortal — it can
+        // never deallocate, and neither can the sim, world or audio it owns.
+        // A weak proxy keeps the loop running while leaving ownership sane.
+        let link = CADisplayLink(target: DisplayLinkProxy(target: self),
+                                 selector: #selector(DisplayLinkProxy.tick(_:)))
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 60, preferred: 60)
         link.add(to: .main, forMode: .common)
         displayLink = link
@@ -266,7 +271,7 @@ final class GameViewController: UIViewController {
 
     // MARK: - Loop
 
-    @objc private func step(_ link: CADisplayLink) {
+    @objc fileprivate func step(_ link: CADisplayLink) {
         let dt = lastTimestamp == 0 ? 1.0 / 60.0 : min(link.targetTimestamp - lastTimestamp, 0.25)
         lastTimestamp = link.targetTimestamp
 
@@ -539,11 +544,18 @@ final class GameViewController: UIViewController {
         return nil
     }
 
-    private func openBloom(for id: AircraftID) {
+    /// Opens the verb bloom. Returns false when the aircraft has nothing the
+    /// tower can say to it right now (a departure still STARTING UP, an aircraft
+    /// mid-climbout), so the caller can answer the tap some other way — an empty
+    /// ring with a callsign and no verbs is a dead end the player can't read.
+    @discardableResult
+    private func openBloom(for id: AircraftID) -> Bool {
         guard let engine = engine,
-              let state = engine.current.aircraft.first(where: { $0.id == id }) else { return }
+              let state = engine.current.aircraft.first(where: { $0.id == id }) else { return false }
+        let verbs = verbOptions(for: state, engine: engine)
+        guard !verbs.isEmpty else { return false }
         selectedAircraft = id
-        frozenVerbs = verbOptions(for: state, engine: engine)
+        frozenVerbs = verbs
 
         // C4: if the aircraft is off-screen, swing the camera to it first; the
         // bloom rides along as the aircraft enters frame (no cuts, PRD law).
@@ -558,6 +570,7 @@ final class GameViewController: UIViewController {
             callsign: state.callsign.display,
             anchor: anchor,
             verbs: frozenVerbs)
+        return true
     }
 
     private func closeBloom() {
@@ -627,13 +640,14 @@ extension GameViewController: GameActions {
     func stripTapped(_ id: AircraftID) {
         // C1: first tap selects + opens the bloom instantly; a second tap on
         // the already-selected strip answers "where is he" by framing it.
-        if id == selectedAircraft {
+        // A tap must always answer. Re-tapping the selected strip frames it;
+        // so does tapping a strip with no legal verbs (STARTING UP, CLIMBING
+        // OUT) — "where is he" beats an empty ring.
+        if id == selectedAircraft || !openBloom(for: id) {
             if let s = engine?.renderStates(alpha: 1).first(where: { $0.id == id }) {
                 cameraRig.frame(worldPoint: s.position,
                                 targetSpan: Double(s.kind.wingspanMeters))
             }
-        } else {
-            openBloom(for: id)
         }
     }
 
@@ -650,5 +664,29 @@ extension GameViewController: GameActions {
 
     func bloomDismissed() {
         closeBloom()
+    }
+}
+
+// =============================================================================
+// DisplayLinkProxy — breaks the CADisplayLink retain cycle.
+//
+// CADisplayLink retains its target, and the run loop it is added to retains the
+// link. Targeting the view controller directly therefore pins it (and the sim,
+// world and audio engine it owns) in memory for the life of the process. This
+// proxy holds the controller weakly, so ownership flows the right way and the
+// controller can actually deallocate; the link is invalidated in its deinit.
+// =============================================================================
+
+private final class DisplayLinkProxy {
+    weak var target: GameViewController?
+
+    init(target: GameViewController) { self.target = target }
+
+    @objc func tick(_ link: CADisplayLink) {
+        guard let target else {
+            link.invalidate()          // owner is gone; stop driving the loop
+            return
+        }
+        target.step(link)
     }
 }

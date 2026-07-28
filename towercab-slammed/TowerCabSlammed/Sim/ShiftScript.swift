@@ -307,7 +307,17 @@ struct ShiftScript {
         let islaEligible = sizeClass == .light || sizeClass == .cabinTwin
         if islaEligible && rng.chance(0.40) {
             var flight = 0
-            repeat { flight = 201 + Int(rng.double(in: 0...48.99)) } while usedIsla.contains(flight)
+            // B28 — bounded, like the tail-number searches below. The pool is
+            // only 49 wide, so an unbounded retry spins forever once it fills;
+            // fall back to a deterministic linear scan, then give up and reuse.
+            var attempts = 0
+            repeat {
+                flight = 201 + Int(rng.double(in: 0...48.99))
+                attempts += 1
+            } while usedIsla.contains(flight) && attempts < 40
+            if usedIsla.contains(flight) {
+                flight = (201...249).first { !usedIsla.contains($0) } ?? flight
+            }
             usedIsla.insert(flight)
             let tens = flight % 100
             let spokenTail = tens < 10 ? "Oh-\(digitWords[tens])"

@@ -353,6 +353,43 @@ reporting C5 honestly: the auto-controller cannot complete 8 movements at KJFK. 
 threshold has deliberately not been lowered.** It should go green when S3 lands; if it
 does not, the bar was wrong rather than the game.
 
+### Codebase review pass
+
+A general review pass over the whole codebase (not just the KJFK findings) turned up
+six defects, all fixed:
+
+1. **Empty verb bloom** *(P1, player-visible)* — `openBloom` opened a ring even when the
+   aircraft had **zero** legal verbs, so tapping a departure that was still STARTING UP
+   (or an aircraft CLIMBING OUT) gave a callsign chip floating over nothing. A tap must
+   always answer: it now frames the aircraft instead, the same "where is he" response as
+   re-tapping a selected strip.
+2. **Unbounded retry loop** — the Isla commuter flight-number allocator span
+   `repeat { … } while usedIsla.contains(flight)` over a 49-wide pool with no attempt
+   cap: an infinite hang once the pool fills. Its sibling tail-number loops were bounded
+   by B28; this one was missed. Now bounded with a deterministic linear fallback.
+3. **CADisplayLink retain cycle** — `CADisplayLink(target: self, …)` added to the main
+   run loop pinned `GameViewController` (and the sim, world and audio engine it owns) in
+   memory for the life of the process. Now driven through a weak proxy.
+4. **Four dead material bindings** in the turboprop/widebody airframe builders — the only
+   compiler warnings in the project. The build is now warning-clean.
+5. **Strip drag opacity** could go negative past a 420 pt flick (SwiftUI clamped it, but
+   the intent belongs in the code).
+6. **Flaky playthrough test** — `testColdStartToFirstCommand` assumed the first strip
+   always has verbs, but `startShift()` seeds randomly, so it failed whenever the first
+   spawn was a departure. It now taps down the rail until something is workable, the way
+   a player does. This is what surfaced defect 1.
+
+**Verified sound, no action needed:** the sim core survives a hostile controller. A new
+`Tools/fuzz.swift` fires random *legal* verbs at random aircraft every tick across 120
+seeds and asserts no NaN or non-finite state, nothing below ground or outside the speed/
+altitude envelope, no runaway score, that every shift terminates, and that determinism
+holds under the (seeded) chaos stream. All pass. Per-frame HUD writes are also all
+equality-guarded, so the old 60 Hz invalidation issue is genuinely fixed.
+
+**B1 is resolved** by the `supportedInterfaceOrientations` / `requestGeometryUpdate`
+change now in the tree: verified the app composes landscape and the strip rail, score and
+streak are fully on-screen.
+
 ### Also landed
 
 - **Sound is off by default, and settable.** `App/GameSettings.swift` persists

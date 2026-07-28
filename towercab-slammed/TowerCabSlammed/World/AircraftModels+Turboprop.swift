@@ -732,8 +732,7 @@ func buildDC3(livery: Livery) -> CraftParts {
         let root = SCNNode()
         let bodyMat = pbrMaterial(pal.body, roughness: pal.roughness, metalness: pal.metalness)
         let tailMat = pbrMaterial(pal.tail, roughness: pal.roughness, metalness: pal.metalness)
-        let tire = pbrMaterial(UIColor(white: 0.08, alpha: 1), roughness: 0.9)
-        let hub = pbrMaterial(UIColor(white: 0.7, alpha: 1), roughness: 0.4, metalness: 0.6)
+        // (wheel materials belong to the LIVE parts below, not the cached shell)
 
         // Fat, near-circular retro fuselage — the DC-3 'dolphin' torpedo, 19.7 m
         // nose-to-tail. Deepest through the cockpit/forward cabin, tapering to a
