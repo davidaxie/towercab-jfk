@@ -13,6 +13,25 @@ import simd
 
 enum WorldAirportBuilder {
 
+    // =========================================================================
+    // THE LIFT LADDER — one source of truth for every horizontal surface's
+    // height above `airport.groundHeight`.
+    //
+    // Read this before adding a surface. On a FLAT field (KJFK sets
+    // `flat = true`, so groundHeight ≡ 0) every one of these is coplanar apart
+    // from its lift, so the ladder alone decides what the depth test draws.
+    //
+    // The KJFK audit (AUDIT-KJFK.md §A1) found the whole airport invisible
+    // because the terrain's field plate was authored at 0.12 — ABOVE every
+    // pavement lift below — and buried the runway, taxiways, apron, hold bars
+    // and all three crossing runways. The plate is now the datum (0.0) and
+    // everything paved stacks above it. `assertLiftLadder()` locks that in.
+    // =========================================================================
+
+    /// The ground the airfield sits on (`Terrain.fieldPlateNode`). THE DATUM —
+    /// nothing paved may sit at or below this.
+    static let fieldPlateLift = 0.0
+
     // Pavement sits just proud of the terrain mesh to avoid z-fighting.
     static let pavementLift = 0.06
     static let stripeLift = 0.11
@@ -28,6 +47,28 @@ enum WorldAirportBuilder {
     static let jfkBoxTaxiLift = 0.020
     static let jfkBoxTaxiStripeLift = 0.030
 
+    /// Every lift that must clear the field plate, lowest first. Kept next to
+    /// the constants so a new surface is a one-line addition here too.
+    static let pavedLifts: [(name: String, lift: Double)] = [
+        ("jfkBoxTaxi", jfkBoxTaxiLift),
+        ("jfkBoxTaxiStripe", jfkBoxTaxiStripeLift),
+        ("jfkBoxRunway", jfkBoxRunwayLift),
+        ("pavement", pavementLift),
+        ("stripe", stripeLift),
+        ("decal", decalLift),
+    ]
+
+    /// Debug-build guard: no paved surface may sink to or below the field
+    /// plate. This is the assertion the A1 bug would have tripped on day one.
+    static func assertLiftLadder() {
+        for entry in pavedLifts {
+            assert(entry.lift > fieldPlateLift,
+                   "Lift ladder violated: \(entry.name) (\(entry.lift)) is not above "
+                   + "fieldPlateLift (\(fieldPlateLift)) — on a flat field this surface "
+                   + "is buried. See AUDIT-KJFK.md §A1.")
+        }
+    }
+
     /// Ramp + infield rects in runway-frame coordinates (shared with
     /// GroundDetails so buildings hug their edges).
     static let apronS0 = 420.0, apronSLen = 200.0
@@ -38,6 +79,7 @@ enum WorldAirportBuilder {
     static let pavedSpotMinP = 95.0
 
     static func build(into root: SCNNode, airport: AirportLayout) {
+        assertLiftLadder()
         let frame = FieldFrame(airport)
         // JFK box: render the OTHER THREE runways + their connecting taxiways
         // BEFORE the active runway so the active Bay Runway's crisp markings win

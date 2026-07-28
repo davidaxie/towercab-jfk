@@ -9,10 +9,12 @@ import SwiftUI
 
 struct TopBarView: View {
     @ObservedObject var state: UIState
+    @ObservedObject private var settings = GameSettings.shared
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             pauseButton
+            soundButton
             stationBlock.allowsHitTesting(false)
             Spacer(minLength: 12)
             scoreBlock.allowsHitTesting(false)
@@ -38,6 +40,23 @@ struct TopBarView: View {
         }
         .buttonStyle(PressScaleButtonStyle())
         .accessibilityIdentifier("pauseButton")
+    }
+
+    // MARK: Sound (persisted; off by default while audio is programmer-synth)
+
+    private var soundButton: some View {
+        Button {
+            settings.soundEnabled.toggle()
+        } label: {
+            Image(systemName: settings.soundEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(Theme.warmWhite.opacity(settings.soundEnabled ? 0.85 : 0.45))
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PressScaleButtonStyle())
+        .accessibilityIdentifier("soundButton")
+        .accessibilityLabel(settings.soundEnabled ? "Sound on" : "Sound off")
     }
 
     // MARK: Left — station identity

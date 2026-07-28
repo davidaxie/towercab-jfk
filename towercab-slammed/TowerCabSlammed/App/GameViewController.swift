@@ -93,7 +93,14 @@ final class GameViewController: UIViewController {
 
         world.sky.setTime(hourOfDay: shiftStartHour)
 
-        audio.start()
+        // Sound follows the persisted setting (off by default while the
+        // soundscape is programmer audio — see GameSettings). Toggling it takes
+        // effect immediately, mid-shift, without a restart.
+        let settings = GameSettings.shared
+        settings.onSoundEnabledChanged = { [weak self] on in
+            self?.audio.setEnabled(on)
+        }
+        audio.setEnabled(settings.soundEnabled)
 
         let link = CADisplayLink(target: self, selector: #selector(step(_:)))
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 60, preferred: 60)
@@ -585,7 +592,7 @@ final class GameViewController: UIViewController {
         entities.values.forEach { $0.node.removeFromParentNode() }
         entities.removeAll()
         audio.removeAllEngines()
-        audio.setMuted(false)
+        audio.setMuted(!GameSettings.shared.soundEnabled)
         engine = SimEngine(airport: airport, seed: seed)
         isPaused = false
         uiState.paused = false

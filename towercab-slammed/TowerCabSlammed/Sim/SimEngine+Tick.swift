@@ -857,6 +857,38 @@ extension SimEngine {
         }
     }
 
+    /// B15, re-derived for KJFK: does harder braking actually buy this aircraft
+    /// an earlier turnoff? A capability test, not a type stereotype.
+    ///
+    /// The old rule was simply "never offer it to a jet", written when the
+    /// Comet could not reach Alpha Two on KAVX's 914 m runway. On KJFK's 4.4 km
+    /// Bay Runway most jets comfortably make the near exit, so the stereotype
+    /// hid a legal and useful verb from 93.8% of the fleet by spawn weight —
+    /// the player could not issue EXPEDITE EXIT to anything but the two
+    /// regional turboprops (AUDIT-KJFK.md §C3).
+    private func expediteBuysEarlierExit(_ ac: Aircraft) -> Bool {
+        let exits = airport.exits.sorted { $0.stationFrom22 < $1.stationFrom22 }
+        guard !exits.isEmpty else { return false }
+        // Before touchdown we reason about the authored touchdown point; on the
+        // roll we use where the aircraft actually is and how fast.
+        let from: Double, v: Double
+        if ac.phase == .rollout {
+            from = station(of: ac.pos2)
+            v = max(ac.speed, Tune.exitSpeed)
+        } else {
+            from = ac.touchdownStation
+            v = ac.kind.approachSpeed * 0.95
+        }
+        func earliestExit(decel: Double) -> Double {
+            let needed = (v * v - Tune.exitSpeed * Tune.exitSpeed) / (2 * decel)
+            let reach = from + needed
+            return (exits.first(where: { $0.stationFrom22 >= reach - 8 })
+                    ?? exits.last!).stationFrom22
+        }
+        return earliestExit(decel: ac.kind.expediteDecel)
+             < earliestExit(decel: ac.kind.rolloutDecel)
+    }
+
     private func chooseExit(_ ac: Aircraft) {
         let decel = ac.expedited ? ac.kind.expediteDecel : ac.kind.rolloutDecel
         let v = max(ac.speed, Tune.exitSpeed)
@@ -1509,13 +1541,12 @@ extension SimEngine {
             var c: [Command] = []
             if !ac.clearedToLand { c.append(.clearedToLand) }
             c.append(.goAround)
-            // B15 — only offer expedite to a type that can actually make an
-            // early turnoff (jets cannot, so the verb isn't a scam).
-            if !ac.expedited && !ac.kind.engineIsJet { c.append(.expediteExit) }
+            // B15 — only offer expedite when it actually buys an earlier
+            // turnoff for THIS aircraft, so the verb is never a scam.
+            if !ac.expedited && expediteBuysEarlierExit(ac) { c.append(.expediteExit) }
             return c
         case .flare, .rollout:
-            // B15 — no phantom expedite for jets.
-            return (ac.expedited || ac.kind.engineIsJet) ? [] : [.expediteExit]
+            return (ac.expedited || !expediteBuysEarlierExit(ac)) ? [] : [.expediteExit]
         case .exitingRunway, .taxiToApron, .taxiToRunway:
             return ac.holdingPosition ? [.continueTaxi] : [.holdPosition]
         case .holdingShort:

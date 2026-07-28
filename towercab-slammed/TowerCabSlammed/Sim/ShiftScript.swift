@@ -42,6 +42,38 @@ struct ShiftScript {
         }
     }
 
+    /// Where this arrival puts its wheels down, in metres past the landing
+    /// threshold. An ABSOLUTE band per size class — never a fraction of runway
+    /// length.
+    ///
+    /// This was `runway.length × 0.275…0.348`, which read as a correct ~250 m
+    /// on KAVX's 914 m runway and became **1,216–1,539 m** on KJFK's 4,423 m
+    /// Bay Runway. The flare still began on schedule at the threshold, so
+    /// `updateFlare` stretched the descent across the remainder and airliners
+    /// floated 1,490 m / 21.4 s a metre off the concrete — in the game's
+    /// most-watched moment (AUDIT-KJFK.md §C1). It also pushed the rollout
+    /// past the near turnoff, which is what made the preferred exit and the
+    /// SLICK EXIT badge unreachable (§C3).
+    ///
+    /// Real airliners aim the touchdown zone ~300 m (1,000 ft) in, bigger metal
+    /// a little deeper. Clamped so a genuinely short runway can never be
+    /// authored an off-the-far-end touchdown.
+    static func touchdownStation(kind: AircraftKind, airport: AirportLayout,
+                                 rng: inout SeededRNG) -> Double {
+        let band: ClosedRange<Double>
+        switch kind.spec.sizeClass {
+        case .light, .cabinTwin:            band = 120...200
+        case .turboprop, .heritage:         band = 150...240
+        case .bizjet:                       band = 200...300
+        case .regional:                     band = 250...350
+        case .narrowbody:                   band = 300...400
+        case .widebody:                     band = 350...450
+        }
+        let aim = rng.double(in: band)
+        // Never author a touchdown deeper than a third of the runway.
+        return min(aim, airport.runway.length / 3)
+    }
+
     /// Coarse spawn-to-threshold estimate used by the authoring guard (B1).
     /// Mirrors the sim's speed-bleed shape without simulating it.
     static func estArrivalDuration(kind: AircraftKind, straightIn: Bool,
@@ -127,7 +159,8 @@ struct ShiftScript {
                 kind: kind,
                 livery: livery,
                 callsign: callsign,
-                touchdownStation: airport.runway.length * rng.double(in: 0.275...0.348)))
+                touchdownStation: Self.touchdownStation(kind: kind, airport: airport,
+                                                        rng: &rng)))
 
             t += Self.baseInterval(at: t) * rng.double(in: 0.85...1.18)
         }

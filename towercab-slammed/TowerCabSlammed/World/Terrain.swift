@@ -138,7 +138,12 @@ enum WorldTerrainBuilder {
         let up = SIMD3<Float>(0, 1, 0)
         let n = outline.count
         let rings = 6
-        let lift = 0.12                                   // sit just above the bay
+        // THE DATUM. Must stay below every paved lift — see the lift ladder in
+        // WorldAirportBuilder. It was 0.12 here, which on the dead-flat KJFK
+        // field sat above all pavement (0.020–0.065) and buried the entire
+        // airport (AUDIT-KJFK.md §A1). The bay is metres below the field, so
+        // the plate needs no lift of its own to clear the water.
+        let lift = WorldAirportBuilder.fieldPlateLift
         // Center + concentric rings out to the outline, all flat at y = ground+lift.
         let centerIdx = mesh.add(worldF3(centroid, airport.groundHeight(at: centroid) + lift),
                                  up, SIMD2<Float>(Float(centroid.x), Float(centroid.y)))

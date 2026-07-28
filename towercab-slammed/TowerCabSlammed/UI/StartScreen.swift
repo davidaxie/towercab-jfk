@@ -7,6 +7,7 @@ import SwiftUI
 
 struct StartScreenView: View {
     @ObservedObject var state: UIState
+    @ObservedObject private var settings = GameSettings.shared
     @State private var revealed = false
 
     var body: some View {
@@ -24,7 +25,9 @@ struct StartScreenView: View {
                     .opacity(revealed ? 1 : 0)
                     .offset(y: revealed ? 0 : 14)
 
-                Text("GOLDEN HOUR · RWY 22 · WIND \(state.windText)")
+                // The active is the Bay Runway 31L — "RWY 22" was left over
+                // from the KAVX slice and named a runway that no longer exists.
+                Text("GOLDEN HOUR · RWY 31L · WIND \(state.windText)")
                     .font(Theme.mono(15, .medium))
                     .tracking(2.0)
                     .foregroundStyle(Theme.warmWhite.opacity(0.7))
@@ -36,6 +39,9 @@ struct StartScreenView: View {
                 startButton
                     .opacity(revealed ? 1 : 0)
                     .offset(y: revealed ? 0 : 12)
+
+                soundToggle
+                    .opacity(revealed ? 1 : 0)
 
                 Spacer().frame(height: 24)
             }
@@ -122,6 +128,30 @@ struct StartScreenView: View {
         }
         .buttonStyle(PressScaleButtonStyle())
         .accessibilityIdentifier("startShift")
+    }
+
+    /// Sound is off by default while the soundscape is programmer-synthesized
+    /// (PRD §5 budgets a real audio pass). Set once here; it persists.
+    private var soundToggle: some View {
+        Button {
+            settings.soundEnabled.toggle()
+        } label: {
+            HStack(spacing: 9) {
+                Image(systemName: settings.soundEnabled
+                      ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                    .font(.system(size: 14, weight: .bold))
+                Text(settings.soundEnabled ? "SOUND ON" : "SOUND OFF")
+                    .font(Theme.display(14, .semibold))
+                    .tracking(2.0)
+            }
+            .foregroundStyle(Theme.warmWhite.opacity(settings.soundEnabled ? 0.82 : 0.5))
+            .padding(.horizontal, 18)
+            .padding(.vertical, 10)
+            .contentShape(Capsule())
+            .overlay(Capsule().strokeBorder(Color.white.opacity(0.22), lineWidth: 1))
+        }
+        .buttonStyle(PressScaleButtonStyle())
+        .accessibilityIdentifier("soundToggle")
     }
 }
 

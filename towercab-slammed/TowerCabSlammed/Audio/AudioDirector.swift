@@ -129,8 +129,40 @@ final class AudioDirector {
         }
     }
 
+    /// Tear the engine down completely. Used when the player turns sound off —
+    /// cheaper and more honest than rendering a silent mix (no audio session,
+    /// no render thread, no battery cost). `start()` rebuilds from scratch.
+    func stop() {
+        guard running else { return }
+        removeAllEngines()
+        engine.mainMixerNode.removeTap(onBus: 0)
+        engine.stop()
+        windNode = nil
+        running = false
+        meterRMS = 0
+        do {
+            try AVAudioSession.sharedInstance().setActive(false,
+                                                          options: [.notifyOthersOnDeactivation])
+        } catch {
+            NSLog("[audio] session deactivate failed: \(error)")
+        }
+        NSLog("[audio] engine stopped")
+    }
+
+    /// The master switch behind the player's sound setting. Off tears the
+    /// engine down; on brings it back up mid-shift without a restart.
+    func setEnabled(_ enabled: Bool) {
+        if enabled {
+            start()
+            setMuted(false)
+        } else {
+            stop()
+        }
+    }
+
     func setMuted(_ m: Bool) {
         muted = m
+        guard running else { return }
         engine.mainMixerNode.outputVolume = m ? 0 : 0.85
     }
 
